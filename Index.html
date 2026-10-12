@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { --blue:#0f62fe; --ink:#161616; --muted:#525252; --line:#e0e0e0; --bg:#f4f4f4; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:16px/1.45 Arial,sans-serif; color:var(--ink); background:var(--bg); }
+    header { background:#161616; color:#fff; padding:1.25rem clamp(1rem,4vw,3rem); }
+    header h1 { margin:0; font-size:1.4rem; }
+    header p { margin:.25rem 0 0; color:#c6c6c6; }
+    main { max-width:1100px; margin:auto; padding:1rem; display:grid; gap:1rem; }
+    .card { background:#fff; padding:1.25rem; border-top:4px solid var(--blue); box-shadow:0 1px 2px #0001; }
+    form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
+    label { display:grid; gap:.35rem; font-weight:600; }
+    input,select,button { font:inherit; padding:.65rem; border:1px solid #8d8d8d; min-width:0; }
+    button { background:var(--blue); color:#fff; border:0; cursor:pointer; font-weight:700; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .wide { grid-column:1/-1; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:.65rem; text-align:left; border-bottom:1px solid var(--line); }
+    th { background:#e8f0ff; }
+    #message { min-height:1.5rem; color:var(--muted); }
+    @media (max-width:700px) { form { grid-template-columns:1fr; } .table-wrap { overflow:auto; } }
+  </style>
+</head>
+<body>
+  <header><h1>IBM AI Teaching &amp; Grading Center</h1><p>Build 0 · Course &amp; semester foundation</p></header>
+  <main>
+    <section class="card" aria-labelledby="create-title">
+      <h2 id="create-title">สร้างรายวิชาที่เปิดสอน / Create offering</h2>
+      <form id="offering-form">
+        <label>ปีการศึกษา / Academic year<input name="academicYear" required value="2569"></label>
+        <label>ภาคเรียน / Term<input name="term" required value="1"></label>
+        <label>ชื่อภาคเรียน / Semester label<input name="semesterLabel" required value="1/2569"></label>
+        <label>รหัสวิชา / Course code<input name="courseCode" required></label>
+        <label>ชื่อวิชา (ไทย)<input name="nameTh" required></label>
+        <label>Course name (English)<input name="nameEn"></label>
+        <label>หน่วยกิต / Credits<input name="credits" required type="number" min="0" max="30" step="0.5" value="3"></label>
+        <label>ตอนเรียน / Section<input name="sectionCode" required></label>
+        <label>ภาษาเริ่มต้น / Default language<select name="defaultLanguage"><option value="th">ไทย</option><option value="en">English</option></select></label>
+        <button class="wide" type="submit">บันทึก / Save</button>
+      </form>
+      <p id="message" role="status" aria-live="polite"></p>
+    </section>
+    <section class="card" aria-labelledby="list-title">
+      <h2 id="list-title">รายวิชาที่เปิดสอน / Offerings</h2>
+      <div class="table-wrap"><table><thead><tr><th>Semester</th><th>Course</th><th>Name</th><th>Section</th><th>Status</th></tr></thead><tbody id="offerings"></tbody></table></div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('offering-form');
+    const message = document.getElementById('message');
+    const tbody = document.getElementById('offerings');
+    function text(value) { return document.createTextNode(value == null ? '' : String(value)); }
+    function render(rows) {
+      tbody.replaceChildren();
+      (rows || []).forEach(row => {
+        const tr = document.createElement('tr');
+        [row.semester && row.semester.label, row.course && row.course.course_code,
+         row.course && (row.course.name_th || row.course.name_en), row.section_code, row.status]
+          .forEach(value => { const td = document.createElement('td'); td.appendChild(text(value)); tr.appendChild(td); });
+        tbody.appendChild(tr);
+      });
+    }
+    function load() {
+      google.script.run.withSuccessHandler(data => render(data.offerings))
+        .withFailureHandler(error => { message.textContent = error.message; }).getBootstrapData();
+    }
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const button = form.querySelector('button');
+      button.disabled = true; message.textContent = 'กำลังบันทึก…';
+      const payload = Object.fromEntries(new FormData(form).entries());
+      google.script.run.withSuccessHandler(() => {
+        message.textContent = 'บันทึกแล้ว'; form.reset(); button.disabled = false; load();
+      }).withFailureHandler(error => {
+        message.textContent = error.message; button.disabled = false;
+      }).createCourseOffering(payload);
+    });
+    load();
+  </script>
+</body>
+</html>
+
