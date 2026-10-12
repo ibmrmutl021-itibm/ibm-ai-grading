@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 
 const files = await readdir(new URL('../', import.meta.url));
-const required = ['Code.gs','Config.gs','Auth.gs','Schema.gs','SheetsRepo.gs','DriveRepo.gs','CourseService.gs','RosterService.gs','Initializer.gs','AuditService.gs','Index.html','TestSuite.gs','appsscript.json'];
+const required = ['Code.gs','Config.gs','Auth.gs','Schema.gs','SheetsRepo.gs','DriveRepo.gs','CourseService.gs','RosterService.gs','IdentityMatchService.gs','ImportService.gs','GradebookService.gs','ExportService.gs','Initializer.gs','AuditService.gs','Index.html','TestSuite.gs','appsscript.json'];
 required.forEach(file => assert.ok(files.includes(file), `missing ${file}`));
 
 const schema = await readFile(new URL('../Schema.gs', import.meta.url), 'utf8');
@@ -35,11 +35,29 @@ const parsed51 = rosterFns.parseRosterText_(roster51);
 assert.equal(parsed51.length, 51);
 assert.equal(parsed51.filter(row => row.parsedStatus === 'WITHDRAWN_PROPOSED').length, 1);
 
+const importSource = await readFile(new URL('../ImportService.gs', import.meta.url), 'utf8');
+const importFns = new Function(`${importSource}; return { parseImportedScore_, makeUniqueHeaders_ };`)();
+assert.deepEqual(importFns.parseImportedScore_('', ''), { numericScore: null, state: 'MISSING' });
+assert.deepEqual(importFns.parseImportedScore_('Viewed', ''), { numericScore: null, state: 'VIEWED' });
+assert.deepEqual(importFns.parseImportedScore_('0', ''), { numericScore: 0, state: 'SCORE' });
+assert.deepEqual(importFns.parseImportedScore_('', 'Unexpected'), { numericScore: null, state: 'REVIEW_REQUIRED' });
+assert.deepEqual(importFns.makeUniqueHeaders_(['Name', 'Name', '']), ['Name', 'Name (2)', 'Column 3']);
+
+const identitySource = await readFile(new URL('../IdentityMatchService.gs', import.meta.url), 'utf8');
+const identityFns = new Function(`${identitySource}; return { nameSimilarity_, levenshteinDistance_ };`)();
+assert.equal(identityFns.levenshteinDistance_('kitten', 'sitting'), 3);
+assert.equal(identityFns.nameSimilarity_('สมชาย', 'สมชาย'), 1);
+
+const exportSource = await readFile(new URL('../ExportService.gs', import.meta.url), 'utf8');
+const exportFns = new Function(`${exportSource}; return { csvEscape_ };`)();
+assert.equal(exportFns.csvEscape_('a,"b"'), '"a,""b"""');
+assert.equal(exportFns.csvEscape_('=1+1'), "'=1+1");
+
 const allSource = await Promise.all(files.filter(file => /\.(gs|html|json)$/.test(file)).map(file => readFile(new URL(`../${file}`, import.meta.url), 'utf8')));
 assert.ok(!allSource.some(source => /(?:api[_-]?key|secret)\s*[:=]\s*["'][^"']+["']/i.test(source)), 'possible hard-coded credential');
 const html = await readFile(new URL('../Index.html', import.meta.url), 'utf8');
 const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/i);
 assert.ok(inlineScript, 'missing UI script');
 assert.doesNotThrow(() => new Function(inlineScript[1]), 'syntax error in Index.html script');
-console.log(`Build 1 static checks passed (${required.length} files, ${expectedSheets.length} sheets, 41/51-row roster fixtures).`);
+console.log(`Build 2 static checks passed (${required.length} files, ${expectedSheets.length} sheets, roster and score fixtures).`);
 

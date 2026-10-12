@@ -1,4 +1,4 @@
-function runBuild1SelfTests() {
+function runBuild2SelfTests() {
   const actor = requireInstructor_();
   const tempSpreadsheet = SpreadsheetApp.create('TEMP IBM Grading Build 0 Test');
   const tempRoot = DriveApp.createFolder('TEMP IBM Grading Build 0 Test ' + newUuid_());
@@ -42,6 +42,24 @@ function runBuild1SelfTests() {
     appendObjects_('roster_entries', otherRows, tempSpreadsheet);
     const separateComparison = compareRosterVersionInternal_(otherVersion, otherRows, tempSpreadsheet);
     results.push(testResult_('51-person roster remains isolated by offering', separateComparison.length === 51 && separateComparison.filter(function(row) { return row.change === 'EXPLICIT_W'; }).length === 1));
+    appendObjects_('students', [{ student_id: '68000000001', official_name_th: 'นักศึกษาทดสอบ 1', official_name_en_nullable: '', metadata: '{}' }], tempSpreadsheet);
+    appendObjects_('enrollments', [{ enrollment_id: newUuid_(), offering_id: ids.offeringId, student_id: '68000000001', registration_status: 'ACTIVE', status_verified_by: actor, status_verified_at: nowIso_() }], tempSpreadsheet);
+    const exactMatch = matchImportedIdentity_(ids.offeringId, { studentId: '68000000001', name: 'Wrong Name' }, tempSpreadsheet);
+    results.push(testResult_('score identity uses validated ID first within offering', exactMatch.state === 'MATCHED_EXACT_ID' && exactMatch.proposedStudentId === '68000000001'));
+    results.push(testResult_('blank, Viewed and zero remain distinct',
+      parseImportedScore_('', '').state === 'MISSING' && parseImportedScore_('Viewed', '').state === 'VIEWED' && parseImportedScore_('0', '').numericScore === 0));
+    const assessmentRows = Array.from({ length: 7 }, function(_, index) {
+      return { assessment_id: newUuid_(), offering_id: ids.offeringId, name: 'Hw' + (index + 1), type: 'OTHER', maximum_score: 10, weight: '', status: 'IMPORT_PLACEHOLDER', current_rubric_version_id: '' };
+    });
+    appendObjects_('assessments', assessmentRows, tempSpreadsheet);
+    const matrix = { headers: ['Student ID', 'Name'].concat(assessmentRows.map(function(row) { return row.name; })), rows: [['68000000001', 'นักศึกษาทดสอบ 1'].concat([0, 1, 2, 3, 4, 5, 6])] };
+    const normalized = normalizeScoreRows_({ batch_id: newUuid_(), offering_id: ids.offeringId }, matrix, {
+      layout: 'WIDE', studentIdColumn: 'Student ID', nameColumn: 'Name', emailColumn: '', statusColumn: '',
+      scoreColumns: assessmentRows.map(function(row) { return { column: row.name, assessmentId: row.assessment_id }; })
+    }, tempSpreadsheet);
+    results.push(testResult_('seven wide assignments normalize without losing zero', normalized.length === 7 && JSON.parse(normalized[0].parsed_json).numericScore === 0));
+    const crossLanguage = matchImportedIdentity_(ids.offeringId, { name: 'Unconfirmed English Name' }, tempSpreadsheet);
+    results.push(testResult_('unconfirmed cross-language name is not silently accepted', ACCEPTED_MATCH_STATES.indexOf(crossLanguage.state) < 0));
   } finally {
     DriveApp.getFileById(tempSpreadsheet.getId()).setTrashed(true);
     tempRoot.setTrashed(true);
@@ -51,7 +69,11 @@ function runBuild1SelfTests() {
 }
 
 function runBuild0SelfTests() {
-  return runBuild1SelfTests();
+  return runBuild2SelfTests();
+}
+
+function runBuild1SelfTests() {
+  return runBuild2SelfTests();
 }
 
 function syntheticRosterVersion_(offeringId, rosterType, approved) {

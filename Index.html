@@ -82,6 +82,61 @@
       </form>
       <p id="alias-message" role="status" aria-live="polite"></p>
     </section>
+    <section class="card" aria-labelledby="assessment-import-title">
+      <h2 id="assessment-import-title">เตรียมคอลัมน์คะแนน / Import assessments</h2>
+      <p>Assessment ที่สร้างใน Build 2 เป็น placeholder สำหรับรับคะแนนเท่านั้น Rubric จะกำหนดใน Build 3</p>
+      <form id="assessment-import-form">
+        <label>Offering<select name="offeringId" id="assessment-offering" required></select></label>
+        <label>Assessment name<input name="name" required placeholder="Hw1"></label>
+        <label>Maximum score<input name="maximumScore" type="number" min="0.01" step="0.01" required></label>
+        <button type="submit">เพิ่ม assessment / Add</button>
+      </form>
+      <p id="assessment-message" role="status" aria-live="polite"></p>
+    </section>
+    <section class="card" aria-labelledby="score-import-title">
+      <h2 id="score-import-title">นำเข้าคะแนน CSV/XLSX / Score import</h2>
+      <form id="score-upload-form">
+        <label>Offering<select name="offeringId" id="score-offering" required></select></label>
+        <label>Import type<select name="importType"><option value="TEAMS_SCORE_XLSX_CSV">Microsoft Teams export</option><option value="GENERIC_SCORE_XLSX_CSV">Generic CSV/XLSX</option></select></label>
+        <label>Score file<input name="file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label>
+        <button type="submit">อัปโหลดและดูตัวอย่าง / Upload preview</button>
+      </form>
+      <p id="score-message" role="status" aria-live="polite"></p>
+      <div id="score-source-preview" class="table-wrap" hidden></div>
+      <div id="score-mapping" hidden>
+        <h3>Column mapping</h3>
+        <form id="score-mapping-form">
+          <label>Layout<select name="layout" id="score-layout"><option value="WIDE">Wide — assignments in columns</option><option value="LONG">Long — one student/assessment per row</option></select></label>
+          <label>Student ID column<select name="studentIdColumn" data-header-select></select></label>
+          <label>Name column<select name="nameColumn" data-header-select></select></label>
+          <label>Email column<select name="emailColumn" data-header-select></select></label>
+          <label>Status column<select name="statusColumn" data-header-select></select></label>
+          <label class="long-field">Assessment column<select name="assessmentColumn" data-header-select></select></label>
+          <label class="long-field">Score column<select name="scoreColumn" data-header-select></select></label>
+          <label class="long-field">Default assessment<select name="defaultAssessmentId" data-assessment-select></select></label>
+          <div class="wide wide-field"><strong>Wide score columns</strong><div id="wide-columns"></div></div>
+          <button class="wide" type="submit">สร้าง mapping preview / Build review</button>
+        </form>
+      </div>
+      <div id="score-review" hidden>
+        <h3>Identity, score and conflict review</h3>
+        <div class="table-wrap"><table><thead><tr><th>Source</th><th>Imported identity</th><th>Assessment</th><th>Raw/state</th><th>Match</th><th>Identity choice</th><th>Conflict action</th></tr></thead><tbody id="score-rows"></tbody></table></div>
+        <div class="actions">
+          <button id="confirm-mappings" type="button" class="secondary">ยืนยัน identity choices</button>
+          <button id="commit-import" type="button">Commit import</button>
+          <button id="rollback-import" type="button" class="secondary">Rollback committed batch</button>
+        </div>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="export-title">
+      <h2 id="export-title">Gradebook export</h2>
+      <form id="export-form">
+        <label>Offering<select name="offeringId" id="export-offering" required></select></label>
+        <label><span>Scope</span><select name="scope"><option value="ALL">All students including W</option><option value="ACTIVE">Active only</option></select></label>
+        <button type="submit">สร้าง CSV ตามลำดับ roster / Export CSV</button>
+      </form>
+      <p id="export-message" role="status" aria-live="polite"></p>
+    </section>
   </main>
   <script>
     const form = document.getElementById('offering-form');
@@ -94,6 +149,9 @@
     const sourceLink = document.getElementById('source-link');
     const aliasForm = document.getElementById('alias-form');
     let activeRosterVersionId = '';
+    let activeScoreBatchId = '';
+    let activeScoreHeaders = [];
+    let activeAssessments = [];
     function text(value) { return document.createTextNode(value == null ? '' : String(value)); }
     function render(rows) {
       tbody.replaceChildren();
@@ -109,12 +167,14 @@
       return `${row.semester && row.semester.label || ''} · ${row.course && row.course.course_code || ''} · Sec ${row.section_code}`;
     }
     function populateOfferings(rows) {
-      const select = document.getElementById('roster-offering');
-      select.replaceChildren();
-      (rows || []).forEach(row => {
-        const option = document.createElement('option'); option.value = row.offering_id;
-        option.appendChild(text(offeringLabel(row))); select.appendChild(option);
+      ['roster-offering','assessment-offering','score-offering','export-offering'].forEach(id => {
+        const select = document.getElementById(id); select.replaceChildren();
+        (rows || []).forEach(row => {
+          const option = document.createElement('option'); option.value = row.offering_id;
+          option.appendChild(text(offeringLabel(row))); select.appendChild(option);
+        });
       });
+      if (rows && rows.length) loadAssessments(rows[0].offering_id);
     }
     function load() {
       google.script.run.withSuccessHandler(data => { render(data.offerings); populateOfferings(data.offerings); })
@@ -223,6 +283,141 @@
       }).withFailureHandler(error => {
         button.disabled = false; document.getElementById('alias-message').textContent = error.message;
       }).addStudentAlias(payload);
+    });
+    function appendOption(select, value, label) {
+      const option = document.createElement('option'); option.value = value; option.appendChild(text(label)); select.appendChild(option);
+    }
+    function loadAssessments(offeringId, done) {
+      google.script.run.withSuccessHandler(rows => {
+        activeAssessments = rows || [];
+        document.querySelectorAll('[data-assessment-select]').forEach(select => {
+          const prior=select.value; select.replaceChildren(); appendOption(select,'','Use assessment column');
+          activeAssessments.forEach(row => appendOption(select,row.assessment_id,`${row.name} / ${row.maximum_score}`));
+          if ([...select.options].some(option => option.value===prior)) select.value=prior;
+        });
+        renderWideColumns(); if (done) done(rows);
+      }).withFailureHandler(error => { document.getElementById('assessment-message').textContent=error.message; })
+        .listImportAssessments(offeringId);
+    }
+    document.getElementById('assessment-offering').addEventListener('change', event => loadAssessments(event.target.value));
+    document.getElementById('score-offering').addEventListener('change', event => loadAssessments(event.target.value));
+    document.getElementById('assessment-import-form').addEventListener('submit', event => {
+      event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); button.disabled=true;
+      google.script.run.withSuccessHandler(() => {
+        button.disabled=false; document.getElementById('assessment-message').textContent='เพิ่ม assessment แล้ว';
+        loadAssessments(form.offeringId.value); form.name.value=''; form.maximumScore.value='';
+      }).withFailureHandler(error => { button.disabled=false; document.getElementById('assessment-message').textContent=error.message; })
+        .createImportAssessment(Object.fromEntries(new FormData(form).entries()));
+    });
+    document.getElementById('score-upload-form').addEventListener('submit', event => {
+      event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button');
+      const values=new FormData(form); const file=values.get('file'); if (!file || !file.size) return;
+      button.disabled=true; document.getElementById('score-message').textContent='กำลังอ่านไฟล์…';
+      const selectedOffering=values.get('offeringId');
+      const reader=new FileReader(); reader.onload=()=>google.script.run.withSuccessHandler(data => {
+        button.disabled=false;
+        if (data.duplicate) { document.getElementById('score-message').textContent=`ไฟล์ซ้ำกับ batch ${data.existingBatchId}`; return; }
+        activeScoreBatchId=data.batchId; activeScoreHeaders=data.headers;
+        renderSourcePreview(data.headers,data.preview);
+        loadAssessments(selectedOffering,()=>{ populateHeaderSelects(); renderWideColumns(); document.getElementById('score-mapping').hidden=false;
+          document.getElementById('score-message').textContent=`พบ ${data.rowCount} แถว กรุณากำหนด column mapping`; });
+      }).withFailureHandler(error => { button.disabled=false; document.getElementById('score-message').textContent=error.message; })
+        .uploadScoreFile({ offeringId:values.get('offeringId'), importType:values.get('importType'), filename:file.name, base64Data:reader.result });
+      reader.onerror=()=>{ button.disabled=false; document.getElementById('score-message').textContent='อ่านไฟล์ไม่สำเร็จ'; };
+      reader.readAsDataURL(file);
+    });
+    function populateHeaderSelects() {
+      document.querySelectorAll('[data-header-select]').forEach(select => {
+        select.replaceChildren(); appendOption(select,'','—'); activeScoreHeaders.forEach(header => appendOption(select,header,header));
+      });
+    }
+    function renderSourcePreview(headers,rows) {
+      const container=document.getElementById('score-source-preview'); const table=document.createElement('table');
+      const head=document.createElement('thead'); const headRow=document.createElement('tr');
+      headers.forEach(header=>{const th=document.createElement('th');th.appendChild(text(header));headRow.appendChild(th);});head.appendChild(headRow);table.appendChild(head);
+      const body=document.createElement('tbody'); (rows||[]).forEach(row=>{const tr=document.createElement('tr');headers.forEach((_,index)=>{const td=document.createElement('td');td.appendChild(text(row[index]));tr.appendChild(td);});body.appendChild(tr);});
+      table.appendChild(body);container.replaceChildren(table);container.hidden=false;
+    }
+    function renderWideColumns() {
+      const container=document.getElementById('wide-columns'); container.replaceChildren();
+      activeScoreHeaders.forEach(header => {
+        const line=document.createElement('div'); line.className='actions';
+        const checkbox=document.createElement('input'); checkbox.type='checkbox'; checkbox.dataset.scoreColumn=header;
+        const label=document.createElement('span'); label.appendChild(text(header));
+        const select=document.createElement('select'); select.dataset.wideAssessment=header; appendOption(select,'','Choose assessment…');
+        activeAssessments.forEach(row => appendOption(select,row.assessment_id,`${row.name} / ${row.maximum_score}`));
+        line.append(checkbox,label,select); container.appendChild(line);
+      });
+    }
+    function updateLayoutVisibility() {
+      const wide=document.getElementById('score-layout').value==='WIDE';
+      document.querySelectorAll('.wide-field').forEach(node => node.hidden=!wide);
+      document.querySelectorAll('.long-field').forEach(node => node.hidden=wide);
+    }
+    document.getElementById('score-layout').addEventListener('change', updateLayoutVisibility); updateLayoutVisibility();
+    document.getElementById('score-mapping-form').addEventListener('submit', event => {
+      event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); button.disabled=true;
+      const mapping=Object.fromEntries(new FormData(form).entries());
+      if (mapping.layout==='WIDE') mapping.scoreColumns=[...document.querySelectorAll('[data-score-column]:checked')].map(box => {
+        const assessmentSelect=[...document.querySelectorAll('[data-wide-assessment]')].find(select=>select.dataset.wideAssessment===box.dataset.scoreColumn);
+        return {column:box.dataset.scoreColumn,assessmentId:assessmentSelect?assessmentSelect.value:''};
+      });
+      google.script.run.withSuccessHandler(data => { button.disabled=false; renderScoreReview(data); })
+        .withFailureHandler(error => { button.disabled=false; document.getElementById('score-message').textContent=error.message; })
+        .configureScoreImport({batchId:activeScoreBatchId,mapping});
+    });
+    function renderScoreReview(data) {
+      activeScoreBatchId=data.batch.batch_id; const body=document.getElementById('score-rows'); body.replaceChildren();
+      (data.rows||[]).forEach(row => {
+        const tr=document.createElement('tr'); const identity=JSON.parse(row.raw_identity||'{}');
+        [row.original_row_ref,[identity.studentId,identity.name,identity.email].filter(Boolean).join(' · '),row.assessment&&row.assessment.name,
+          `${row.raw_score || '∅'} / ${row.parsed.scoreState}`,`${row.match_state}: ${row.parsed.matchReason}`]
+          .forEach(value=>{const td=document.createElement('td');td.appendChild(text(value));tr.appendChild(td);});
+        const choiceCell=document.createElement('td'); const choice=document.createElement('select'); choice.dataset.mapRow=row.import_row_id;
+        appendOption(choice,'','No change');
+        const candidates=row.parsed.candidates||[];
+        candidates.forEach(candidate=>appendOption(choice,candidate.studentId,`${candidate.studentId} ${candidate.nameTh||candidate.nameEn||''}`));
+        if (row.proposed_student_id && !candidates.some(candidate=>candidate.studentId===String(row.proposed_student_id))) appendOption(choice,row.proposed_student_id,row.proposed_student_id);
+        (data.students||[]).filter(student=>!candidates.some(candidate=>candidate.studentId===String(student.student_id)) && String(student.student_id)!==String(row.proposed_student_id))
+          .forEach(student=>appendOption(choice,student.student_id,`${student.student_id} ${student.official_name_th||student.official_name_en_nullable||''}`));
+        choiceCell.appendChild(choice);tr.appendChild(choiceCell);
+        const resolutionCell=document.createElement('td'); const resolution=document.createElement('select'); resolution.dataset.resolveRow=row.import_row_id;
+        appendOption(resolution,'',row.conflict?'Choose conflict action':'Default commit'); appendOption(resolution,'SKIP','SKIP'); appendOption(resolution,'REVIEW_DIFF','REVIEW_DIFF');
+        if (row.conflict) appendOption(resolution,'REPLACE_WITH_AUDIT','REPLACE_WITH_AUDIT');
+        resolutionCell.appendChild(resolution);tr.appendChild(resolutionCell);body.appendChild(tr);
+      });
+      document.getElementById('score-review').hidden=false;
+      document.getElementById('score-message').textContent=`Normalized ${data.rows.length} score rows`;
+    }
+    document.getElementById('confirm-mappings').addEventListener('click', event => {
+      const choices={}; document.querySelectorAll('[data-map-row]').forEach(select=>{if(select.value)choices[select.dataset.mapRow]=select.value;});
+      event.currentTarget.disabled=true;
+      google.script.run.withSuccessHandler(data=>{event.currentTarget.disabled=false;renderScoreReview(data);document.getElementById('score-message').textContent='ยืนยัน identity mapping แล้ว';})
+        .withFailureHandler(error=>{event.currentTarget.disabled=false;document.getElementById('score-message').textContent=error.message;})
+        .confirmImportMappings({batchId:activeScoreBatchId,choices,reason:'Instructor confirmed score-import identity'});
+    });
+    document.getElementById('commit-import').addEventListener('click', event => {
+      const resolutions={}; document.querySelectorAll('[data-resolve-row]').forEach(select=>{if(select.value)resolutions[select.dataset.resolveRow]=select.value;});
+      event.currentTarget.disabled=true;
+      google.script.run.withSuccessHandler(result=>{event.currentTarget.disabled=false;document.getElementById('score-message').textContent=`${result.status}: created ${result.created}, replaced ${result.replaced}, review ${result.skipped}`;})
+        .withFailureHandler(error=>{event.currentTarget.disabled=false;document.getElementById('score-message').textContent=error.message;})
+        .commitScoreImport({batchId:activeScoreBatchId,resolutions,reason:'Instructor committed reviewed score import'});
+    });
+    document.getElementById('rollback-import').addEventListener('click', event => {
+      if (!activeScoreBatchId) return; const reason=window.prompt('Rollback reason / เหตุผล'); if (!reason) return;
+      event.currentTarget.disabled=true;
+      google.script.run.withSuccessHandler(result=>{event.currentTarget.disabled=false;document.getElementById('score-message').textContent=`Rolled back ${result.affectedEntries} entries`;})
+        .withFailureHandler(error=>{event.currentTarget.disabled=false;document.getElementById('score-message').textContent=error.message;})
+        .rollbackScoreImport({batchId:activeScoreBatchId,reason});
+    });
+    document.getElementById('export-form').addEventListener('submit', event => {
+      event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); button.disabled=true;
+      document.getElementById('export-message').textContent='กำลังสร้างไฟล์…';
+      google.script.run.withSuccessHandler(result=>{
+        button.disabled=false; const link=document.createElement('a');link.href=result.fileUrl;link.target='_blank';link.rel='noopener';link.textContent=`เปิด ${result.filename} (${result.rowCount} rows)`;
+        document.getElementById('export-message').replaceChildren(link);
+      }).withFailureHandler(error=>{button.disabled=false;document.getElementById('export-message').textContent=error.message;})
+        .exportGradebookCsv({offeringId:form.offeringId.value,includeActiveOnly:form.scope.value==='ACTIVE'});
     });
     load();
   </script>

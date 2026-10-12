@@ -22,7 +22,8 @@ function getBootstrapData() {
   return {
     setup: getSetupStatus(),
     offerings: listCourseOfferings(),
-    rosterTypes: ROSTER_TYPES
+    rosterTypes: ROSTER_TYPES,
+    scoreImportTypes: SCORE_IMPORT_TYPES
   };
 }
 

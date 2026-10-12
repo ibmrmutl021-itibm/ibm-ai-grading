@@ -1,6 +1,6 @@
 # IBM AI Teaching & Grading Center
 
-Google Apps Script MVP following the approved blueprint. This repository currently implements **Build 0 and Build 1**: deployment foundation, the central Sheets schema, Drive layout, single-instructor authorization, audit logging, course offerings, roster PDF upload/extraction, immutable roster versions, comparison, enrollment-status confirmation, and confirmed student aliases.
+Google Apps Script MVP following the approved blueprint. This repository currently implements **Build 0 through Build 2**: the deployment foundation, roster/identity workflow, CSV/XLSX score ingestion, reviewable mapping, conflict-safe gradebook commit/rollback, and roster-ordered CSV export.
 
 ## File tree
 
@@ -14,6 +14,10 @@ Google Apps Script MVP following the approved blueprint. This repository current
 ├── DriveRepo.gs            # Restricted Drive folder initializer
 ├── CourseService.gs        # Build 0 course-offering service
 ├── RosterService.gs        # Build 1 roster extraction, comparison and approval
+├── IdentityMatchService.gs # Section-scoped exact and suggested matching
+├── ImportService.gs        # Build 2 CSV/XLSX upload, mapping and normalization
+├── GradebookService.gs     # Conflict-safe commit and audited rollback
+├── ExportService.gs        # Official-roster-order CSV export
 ├── Initializer.gs          # Safe/idempotent Build 0 setup
 ├── AuditService.gs         # Immutable append-only audit records
 ├── TestSuite.gs            # Isolated Apps Script self-test
@@ -29,7 +33,7 @@ Google Apps Script MVP following the approved blueprint. This repository current
 3. Run `setupBuild0({seedSyntheticData: true})` once from the Apps Script editor and grant the requested scopes. It creates a private database spreadsheet and `IBM_Grading_Center` root folder when IDs are not already configured.
 4. In **Services**, confirm that the advanced Google Drive API (`Drive`, v3) is enabled. The manifest declares it, but the backing Google Cloud project may also require the Drive API to be enabled.
 5. Copy the returned IDs into Script Properties if the runtime has not retained them automatically. `SPREADSHEET_ID` and `ROOT_FOLDER_ID` are stored by the initializer.
-6. Run `runBuild1SelfTests()`. It creates isolated temporary resources, validates the foundation, 41/51-person roster reconciliation and offering isolation, then moves those resources to trash. `runBuild0SelfTests()` remains as a compatibility alias.
+6. Run `runBuild2SelfTests()`. It creates isolated temporary resources, validates the foundation, 41/51-person roster reconciliation, offering isolation, identity precedence, and score-state separation, then moves those resources to trash. Earlier self-test names remain as compatibility aliases.
 7. Deploy only after reviewing the test result: **Deploy → New deployment → Web app**, execute as **Me**, and restrict access to the narrowest available organization/account setting. The server still enforces `INSTRUCTOR_EMAIL` on every exposed action.
 
 ## Script Properties
@@ -65,6 +69,17 @@ The manifest requests Drive, Docs, Sheets, and active-user email scopes. Drive A
 - Official names are not silently overwritten when a later roster differs.
 - Confirmed aliases record actor, timestamp, type and scope.
 
+## Build 2 behavior
+
+- Accepts Teams or generic CSV/XLSX files up to 10 MB; source files are stored privately with SHA-256 duplicate detection.
+- Supports long and wide layouts with instructor-controlled column mapping.
+- Exact validated Student ID is matched first, followed by confirmed alias and unique exact normalized name.
+- Fuzzy suggestions are never committed until the instructor explicitly confirms a student in the selected offering.
+- Blank, `Viewed`, `Absent`, `Not submitted`, `Ungraded`, `Excused`, and numeric zero remain distinct.
+- Existing grades require `SKIP`, `REPLACE_WITH_AUDIT`, or `REVIEW_DIFF`; duplicate rows within a batch cannot silently create duplicate gradebook records.
+- Import rollback restores replaced values from audit history or voids newly created entries without deleting provenance.
+- CSV export follows the latest approved roster order, can include W students, does not calculate a letter grade for W, and mitigates spreadsheet-formula injection.
+
 ## Local verification
 
 ```powershell
@@ -78,8 +93,8 @@ The end-to-end self-test must be run inside Apps Script because it verifies Goog
 - One instructor owns/deploys the MVP.
 - Academic year and term are kept as strings to support Thai Buddhist years and preserve formatting.
 - Build 0 may create new private resources, but it never deploys or touches an existing database without an explicitly configured ID.
-- Score import, rubrics, AI grading, centralized approval queues, and exports remain intentionally out of scope until their numbered builds.
+- Rubrics, AI grading, photo extraction, and the centralized approval queue remain intentionally out of scope until their numbered builds.
 
-## Proposed Build 2
+## Proposed Build 3
 
-After Build 1 is accepted: add CSV/XLSX and Teams score ingestion, column/header preview, long/wide mapping, identity review, duplicate-batch detection, missing-versus-zero preservation, audited conflict resolution, and gradebook CSV/XLSX export. Development should use anonymized fixtures first and must not connect to a production database without explicit confirmation.
+After Build 2 is accepted: replace import placeholders with the full assessment form, criterion rubric editor, answer-key editor, strict maximum validation, immutable rubric versions, approval and locking. Development should use anonymized fixtures first and must not connect to a production database without explicit confirmation.

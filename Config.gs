@@ -1,12 +1,14 @@
 const APP_CONFIG = Object.freeze({
   APP_NAME: 'IBM AI Teaching & Grading Center',
-  APP_VERSION: '0.2.0-build1',
+  APP_VERSION: '0.3.0-build2',
   SCHEMA_VERSION: '1',
   DEFAULT_LANGUAGE: 'th',
   ROOT_FOLDER_NAME: 'IBM_Grading_Center',
   LOCK_TIMEOUT_MS: 30000,
   MAX_ROSTER_UPLOAD_BYTES: 10 * 1024 * 1024,
   ROSTER_PARSER_VERSION: 'roster-regex-v1',
+  SCORE_PARSER_VERSION: 'score-tabular-v1',
+  MAX_SCORE_UPLOAD_BYTES: 10 * 1024 * 1024,
   PROPERTY_KEYS: Object.freeze({
     INSTRUCTOR_EMAIL: 'INSTRUCTOR_EMAIL',
     SPREADSHEET_ID: 'SPREADSHEET_ID',
