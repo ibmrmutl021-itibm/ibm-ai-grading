@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 
 const files = await readdir(new URL('../', import.meta.url));
-const required = ['Code.gs','Config.gs','Auth.gs','Schema.gs','SheetsRepo.gs','DriveRepo.gs','CourseService.gs','Initializer.gs','AuditService.gs','Index.html','TestSuite.gs','appsscript.json'];
+const required = ['Code.gs','Config.gs','Auth.gs','Schema.gs','SheetsRepo.gs','DriveRepo.gs','CourseService.gs','RosterService.gs','Initializer.gs','AuditService.gs','Index.html','TestSuite.gs','appsscript.json'];
 required.forEach(file => assert.ok(files.includes(file), `missing ${file}`));
 
 const schema = await readFile(new URL('../Schema.gs', import.meta.url), 'utf8');
@@ -12,13 +12,34 @@ expectedSheets.forEach(name => assert.match(schema, new RegExp(`\\b${name}:`), `
 const manifest = JSON.parse(await readFile(new URL('../appsscript.json', import.meta.url), 'utf8'));
 assert.equal(manifest.runtimeVersion, 'V8');
 assert.equal(manifest.webapp.executeAs, 'USER_DEPLOYING');
+assert.ok(manifest.dependencies.enabledAdvancedServices.some(service => service.userSymbol === 'Drive' && service.version === 'v3'));
 
 for (const file of files.filter(file => file.endsWith('.gs'))) {
   const source = await readFile(new URL(`../${file}`, import.meta.url), 'utf8');
   assert.doesNotThrow(() => new Function(source), `syntax error in ${file}`);
 }
 
+const rosterSource = await readFile(new URL('../RosterService.gs', import.meta.url), 'utf8');
+const rosterFns = new Function(`${rosterSource}; return { parseRosterText_, normalizeName_, sanitizeUploadFilename_ };`)();
+const parsedRoster = rosterFns.parseRosterText_('1 68123456789 นายทดสอบ หนึ่ง\n2 68541206308-1 นางสาวทดสอบ สอง ถอนวิชา(W)');
+assert.equal(parsedRoster.length, 2);
+assert.equal(parsedRoster[0].studentId, '68123456789');
+assert.equal(parsedRoster[1].parsedStatus, 'WITHDRAWN_PROPOSED');
+assert.equal(rosterFns.normalizeName_('สมชาย  ใจดี'), rosterFns.normalizeName_('สมชายใจดี'));
+assert.equal(rosterFns.sanitizeUploadFilename_('../../roster.pdf'), 'roster.pdf');
+assert.throws(() => rosterFns.sanitizeUploadFilename_('../..'));
+const roster41 = Array.from({length: 41}, (_, index) => `${index + 1} ${String(68000000001 + index)} นักศึกษาทดสอบ ${index + 1}`).join('\n');
+assert.equal(rosterFns.parseRosterText_(roster41).length, 41);
+const roster51 = Array.from({length: 51}, (_, index) => `${index + 1} ${index === 0 ? '68541206308-1' : String(69000000001 + index)} นักศึกษาทดสอบ ${index + 1}${index === 0 ? ' ถอนวิชา(W)' : ''}`).join('\n');
+const parsed51 = rosterFns.parseRosterText_(roster51);
+assert.equal(parsed51.length, 51);
+assert.equal(parsed51.filter(row => row.parsedStatus === 'WITHDRAWN_PROPOSED').length, 1);
+
 const allSource = await Promise.all(files.filter(file => /\.(gs|html|json)$/.test(file)).map(file => readFile(new URL(`../${file}`, import.meta.url), 'utf8')));
 assert.ok(!allSource.some(source => /(?:api[_-]?key|secret)\s*[:=]\s*["'][^"']+["']/i.test(source)), 'possible hard-coded credential');
-console.log(`Build 0 static checks passed (${required.length} files, ${expectedSheets.length} sheets).`);
+const html = await readFile(new URL('../Index.html', import.meta.url), 'utf8');
+const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/i);
+assert.ok(inlineScript, 'missing UI script');
+assert.doesNotThrow(() => new Function(inlineScript[1]), 'syntax error in Index.html script');
+console.log(`Build 1 static checks passed (${required.length} files, ${expectedSheets.length} sheets, 41/51-row roster fixtures).`);
 

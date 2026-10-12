@@ -22,6 +22,11 @@ function initializeSheets_(spreadsheet) {
       .setFontWeight('bold')
       .setBackground('#0f62fe')
       .setFontColor('#ffffff');
+    headers.forEach(function(header, index) {
+      if (header === 'student_id' || /_id$/.test(header)) {
+        sheet.getRange(2, index + 1, Math.max(1, sheet.getMaxRows() - 1), 1).setNumberFormat('@');
+      }
+    });
   });
   const defaultSheet = ss.getSheetByName('Sheet1');
   if (defaultSheet && Object.keys(SHEET_SCHEMA).indexOf('Sheet1') === -1 && ss.getSheets().length > 1 && defaultSheet.getLastRow() === 0) {
@@ -69,6 +74,38 @@ function listObjects_(sheetName, spreadsheet) {
       return result;
     }, {});
   });
+}
+
+function findObjectBy_(sheetName, key, value, spreadsheet) {
+  return listObjects_(sheetName, spreadsheet).find(function(row) {
+    return String(row[key]) === String(value);
+  }) || null;
+}
+
+function updateObjectByKey_(sheetName, key, value, changes, spreadsheet) {
+  const headers = SHEET_SCHEMA[sheetName];
+  if (!headers || headers.indexOf(key) < 0) throw new Error('Invalid update key for ' + sheetName + ': ' + key);
+  Object.keys(changes || {}).forEach(function(field) {
+    if (headers.indexOf(field) < 0) throw new Error('Unknown field for ' + sheetName + ': ' + field);
+  });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(APP_CONFIG.LOCK_TIMEOUT_MS);
+  try {
+    const sheet = getSheet_(sheetName, spreadsheet);
+    if (sheet.getLastRow() < 2) throw new Error('Record not found in ' + sheetName + ': ' + value);
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues();
+    const keyIndex = headers.indexOf(key);
+    const rowIndex = values.findIndex(function(row) { return String(row[keyIndex]) === String(value); });
+    if (rowIndex < 0) throw new Error('Record not found in ' + sheetName + ': ' + value);
+    const before = headers.reduce(function(result, header, index) {
+      result[header] = values[rowIndex][index]; return result;
+    }, {});
+    const after = Object.assign({}, before, changes);
+    sheet.getRange(rowIndex + 2, 1, 1, headers.length).setValues([headers.map(function(header) { return after[header]; })]);
+    return { before: before, after: after };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function upsertSetting_(key, value, spreadsheet) {

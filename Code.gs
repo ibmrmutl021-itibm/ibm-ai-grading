@@ -21,7 +21,8 @@ function include_(filename) {
 function getBootstrapData() {
   return {
     setup: getSetupStatus(),
-    offerings: listCourseOfferings()
+    offerings: listCourseOfferings(),
+    rosterTypes: ROSTER_TYPES
   };
 }
 

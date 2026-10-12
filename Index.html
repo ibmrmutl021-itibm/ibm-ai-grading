@@ -22,12 +22,16 @@
     table { width:100%; border-collapse:collapse; }
     th,td { padding:.65rem; text-align:left; border-bottom:1px solid var(--line); }
     th { background:#e8f0ff; }
-    #message { min-height:1.5rem; color:var(--muted); }
+    #message,#roster-message,#alias-message { min-height:1.5rem; color:var(--muted); }
+    .status { font-weight:700; }
+    .danger { color:#da1e28; }
+    .actions { display:flex; gap:.75rem; align-items:center; flex-wrap:wrap; }
+    .secondary { background:#393939; }
     @media (max-width:700px) { form { grid-template-columns:1fr; } .table-wrap { overflow:auto; } }
   </style>
 </head>
 <body>
-  <header><h1>IBM AI Teaching &amp; Grading Center</h1><p>Build 0 · Course &amp; semester foundation</p></header>
+  <header><h1>IBM AI Teaching &amp; Grading Center</h1><p>Build 1 · Roster versions &amp; student identity</p></header>
   <main>
     <section class="card" aria-labelledby="create-title">
       <h2 id="create-title">สร้างรายวิชาที่เปิดสอน / Create offering</h2>
@@ -49,11 +53,47 @@
       <h2 id="list-title">รายวิชาที่เปิดสอน / Offerings</h2>
       <div class="table-wrap"><table><thead><tr><th>Semester</th><th>Course</th><th>Name</th><th>Section</th><th>Status</th></tr></thead><tbody id="offerings"></tbody></table></div>
     </section>
+    <section class="card" aria-labelledby="roster-title">
+      <h2 id="roster-title">นำเข้ารายชื่อนักศึกษา / Import roster PDF</h2>
+      <p>เลือกประเภทเอกสารก่อนอัปโหลด ระบบจะเก็บไฟล์ต้นฉบับและให้ตรวจทานก่อนอนุมัติเสมอ</p>
+      <form id="roster-form">
+        <label>รายวิชา / Offering<select name="offeringId" id="roster-offering" required></select></label>
+        <label>ประเภท / Type<select name="rosterType" required><option value="ROSTER_CLASSROOM">Initial classroom roster</option><option value="ROSTER_EXAM">Exam-attendance roster</option></select></label>
+        <label>วันที่เอกสาร / Document date<input name="documentDate" type="date" required></label>
+        <label>PDF roster<input name="file" type="file" accept="application/pdf,.pdf" required></label>
+        <button class="wide" type="submit">อัปโหลดและแยกข้อมูล / Upload &amp; extract</button>
+      </form>
+      <p id="roster-message" role="status" aria-live="polite"></p>
+      <div id="roster-review" hidden>
+        <div class="actions"><a id="source-link" target="_blank" rel="noopener">เปิดไฟล์ต้นฉบับ / Open source</a></div>
+        <div class="table-wrap"><table><thead><tr><th>ID</th><th>Parsed name</th><th>Page/row</th><th>Change</th><th>Remark/review</th><th>Decision</th><th>Correction</th></tr></thead><tbody id="roster-rows"></tbody></table></div>
+        <label>เหตุผลการอนุมัติ / Approval reason<input id="approval-reason" value="Instructor reviewed roster preview"></label>
+        <button id="approve-roster" type="button">อนุมัติ roster version / Approve</button>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="alias-title">
+      <h2 id="alias-title">ยืนยันชื่อเรียกอื่น / Confirm student alias</h2>
+      <form id="alias-form">
+        <label>Student ID<input name="studentId" required></label>
+        <label>Alias<input name="aliasValue" required></label>
+        <label>Kind<select name="kind"><option>THAI_NAME</option><option>ENGLISH_NAME</option><option>EMAIL</option><option>OTHER</option></select></label>
+        <label>Scope<input name="scope" value="GLOBAL" required></label>
+        <button class="wide" type="submit">ยืนยัน alias / Confirm</button>
+      </form>
+      <p id="alias-message" role="status" aria-live="polite"></p>
+    </section>
   </main>
   <script>
     const form = document.getElementById('offering-form');
     const message = document.getElementById('message');
     const tbody = document.getElementById('offerings');
+    const rosterForm = document.getElementById('roster-form');
+    const rosterMessage = document.getElementById('roster-message');
+    const rosterReview = document.getElementById('roster-review');
+    const rosterRows = document.getElementById('roster-rows');
+    const sourceLink = document.getElementById('source-link');
+    const aliasForm = document.getElementById('alias-form');
+    let activeRosterVersionId = '';
     function text(value) { return document.createTextNode(value == null ? '' : String(value)); }
     function render(rows) {
       tbody.replaceChildren();
@@ -65,9 +105,77 @@
         tbody.appendChild(tr);
       });
     }
+    function offeringLabel(row) {
+      return `${row.semester && row.semester.label || ''} · ${row.course && row.course.course_code || ''} · Sec ${row.section_code}`;
+    }
+    function populateOfferings(rows) {
+      const select = document.getElementById('roster-offering');
+      select.replaceChildren();
+      (rows || []).forEach(row => {
+        const option = document.createElement('option'); option.value = row.offering_id;
+        option.appendChild(text(offeringLabel(row))); select.appendChild(option);
+      });
+    }
     function load() {
-      google.script.run.withSuccessHandler(data => render(data.offerings))
+      google.script.run.withSuccessHandler(data => { render(data.offerings); populateOfferings(data.offerings); })
         .withFailureHandler(error => { message.textContent = error.message; }).getBootstrapData();
+    }
+    function renderRosterReview(data) {
+      activeRosterVersionId = data.version.roster_version_id;
+      rosterRows.replaceChildren();
+      sourceLink.href = data.sourceUrl;
+      (data.comparison || []).forEach(item => {
+        const row = item.current || item.previous;
+        const tr = document.createElement('tr');
+        let idInput = null; let nameInput = null; let remarkInput = null;
+        if (item.current) {
+          const idCell = document.createElement('td'); idInput = document.createElement('input');
+          idInput.value = item.current.student_id; idInput.dataset.field = 'studentId'; idCell.appendChild(idInput); tr.appendChild(idCell);
+          const nameCell = document.createElement('td'); nameInput = document.createElement('input');
+          nameInput.value = item.current.parsed_name; nameInput.dataset.field = 'parsedName'; nameCell.appendChild(nameInput); tr.appendChild(nameCell);
+        } else {
+          [item.studentId, row && row.parsed_name].forEach(value => { const td=document.createElement('td'); td.appendChild(text(value)); tr.appendChild(td); });
+        }
+        [`${item.current ? `${item.current.page_number}/${item.current.row_number}` : '—'}`, item.change]
+          .forEach(value => { const td = document.createElement('td'); td.appendChild(text(value)); tr.appendChild(td); });
+        const remarkCell = document.createElement('td');
+        if (item.current) {
+          remarkInput = document.createElement('input'); remarkInput.value = item.current.raw_remark || '';
+          remarkInput.dataset.field = 'rawRemark'; remarkCell.appendChild(remarkInput);
+          if (item.current.confidence_flag) { const flag=document.createElement('div'); flag.className='danger'; flag.appendChild(text(item.current.confidence_flag)); remarkCell.appendChild(flag); }
+        } else remarkCell.appendChild(text('Missing from new roster'));
+        tr.appendChild(remarkCell);
+        const decisionCell = document.createElement('td');
+        if (item.current) {
+          const select = document.createElement('select'); select.dataset.entryId = item.current.roster_entry_id;
+          const options = item.change === 'EXPLICIT_W'
+            ? [['','Choose…'],['WITHDRAWN','Confirm W'],['PENDING_VERIFICATION','Keep unresolved']]
+            : [['ACTIVE','Active'],['PENDING_VERIFICATION','Pending verification'],['WITHDRAWN','Withdrawn']];
+          options.forEach(([value,label]) => { const option = document.createElement('option'); option.value=value; option.textContent=label; select.appendChild(option); });
+          decisionCell.appendChild(select);
+        } else {
+          decisionCell.appendChild(text('PENDING_VERIFICATION'));
+        }
+        tr.appendChild(decisionCell);
+        const correctionCell = document.createElement('td');
+        if (item.current) {
+          const save = document.createElement('button'); save.type='button'; save.className='secondary'; save.textContent='Save correction';
+          save.addEventListener('click', () => {
+            const reason = window.prompt('Correction reason / เหตุผลการแก้ไข'); if (!reason) return;
+            save.disabled=true; rosterMessage.textContent='กำลังบันทึกการแก้ไข…';
+            google.script.run.withSuccessHandler(data => { save.disabled=false; renderRosterReview(data); rosterMessage.textContent='บันทึกการแก้ไขแล้ว'; })
+              .withFailureHandler(error => { save.disabled=false; rosterMessage.textContent=error.message; })
+              .correctRosterEntry({ rosterEntryId:item.current.roster_entry_id,
+                studentId:idInput.value, parsedName:nameInput.value, rawRemark:remarkInput.value, reason });
+          });
+          correctionCell.appendChild(save);
+        }
+        tr.appendChild(correctionCell); rosterRows.appendChild(tr);
+      });
+      rosterReview.hidden = false;
+      rosterMessage.textContent = data.extractionError
+        ? `เก็บไฟล์ต้นฉบับแล้ว แต่ extraction ต้องตรวจแก้: ${data.extractionError}`
+        : `พบ ${data.entries.length} รายการ กรุณาตรวจต้นฉบับก่อนอนุมัติ`;
     }
     form.addEventListener('submit', event => {
       event.preventDefault();
@@ -79,6 +187,42 @@
       }).withFailureHandler(error => {
         message.textContent = error.message; button.disabled = false;
       }).createCourseOffering(payload);
+    });
+    rosterForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const button = rosterForm.querySelector('button');
+      const values = new FormData(rosterForm); const file = values.get('file');
+      if (!file || !file.size) return;
+      button.disabled = true; rosterMessage.textContent = 'กำลังอัปโหลดและแยกข้อความ…'; rosterReview.hidden = true;
+      const reader = new FileReader();
+      reader.onload = () => google.script.run.withSuccessHandler(data => {
+        button.disabled = false; renderRosterReview(data);
+      }).withFailureHandler(error => {
+        button.disabled = false; rosterMessage.textContent = error.message;
+      }).uploadRosterFile({ offeringId: values.get('offeringId'), rosterType: values.get('rosterType'),
+        documentDate: values.get('documentDate'), filename: file.name, base64Data: reader.result });
+      reader.onerror = () => { button.disabled = false; rosterMessage.textContent = 'อ่านไฟล์ไม่สำเร็จ'; };
+      reader.readAsDataURL(file);
+    });
+    document.getElementById('approve-roster').addEventListener('click', event => {
+      const decisions = {};
+      rosterRows.querySelectorAll('select[data-entry-id]').forEach(select => { if (select.value) decisions[select.dataset.entryId] = select.value; });
+      event.currentTarget.disabled = true; rosterMessage.textContent = 'กำลังบันทึกการอนุมัติ…';
+      google.script.run.withSuccessHandler(data => {
+        event.currentTarget.disabled = false; renderRosterReview(data); rosterMessage.textContent = 'อนุมัติ roster version แล้ว';
+      }).withFailureHandler(error => {
+        event.currentTarget.disabled = false; rosterMessage.textContent = error.message;
+      }).approveRosterVersion({ rosterVersionId: activeRosterVersionId, decisions,
+        reason: document.getElementById('approval-reason').value });
+    });
+    aliasForm.addEventListener('submit', event => {
+      event.preventDefault(); const button = aliasForm.querySelector('button'); button.disabled = true;
+      const payload = Object.fromEntries(new FormData(aliasForm).entries());
+      google.script.run.withSuccessHandler(() => {
+        button.disabled = false; document.getElementById('alias-message').textContent = 'ยืนยัน alias แล้ว'; aliasForm.reset();
+      }).withFailureHandler(error => {
+        button.disabled = false; document.getElementById('alias-message').textContent = error.message;
+      }).addStudentAlias(payload);
     });
     load();
   </script>

@@ -25,10 +25,12 @@ function createOfferingDriveLayout_(academicYear, term, courseCode, sectionCode)
   const root = DriveApp.getFolderById(getRequiredProperty_(APP_CONFIG.PROPERTY_KEYS.ROOT_FOLDER_ID));
   const period = sanitizePathPart_(academicYear + '-' + term);
   const offering = sanitizePathPart_(courseCode + '-' + sectionCode);
+  const folders = {};
   ['rosters', 'assessments', 'submissions', 'imports', 'outputs'].forEach(function(area) {
     const areaFolder = ensureChildFolder_(root, area);
-    ensureChildFolder_(ensureChildFolder_(areaFolder, period), offering);
+    folders[area] = ensureChildFolder_(ensureChildFolder_(areaFolder, period), offering);
   });
+  return folders;
 }
 
 function sanitizePathPart_(value) {
