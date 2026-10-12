@@ -29,6 +29,19 @@ function setupBuild0(options) {
   return { spreadsheetId: spreadsheetId, rootFolderId: rootFolderId, folders: drive.folders };
 }
 
+function bootstrapInstructorEmail() {
+  const activeEmail = normalizeEmail_(Session.getActiveUser().getEmail());
+  const effectiveEmail = normalizeEmail_(Session.getEffectiveUser().getEmail());
+  const actor = activeEmail || effectiveEmail;
+  if (!actor) throw new Error('Unable to determine the authorized Google account.');
+  const props = getScriptProperties_();
+  const key = APP_CONFIG.PROPERTY_KEYS.INSTRUCTOR_EMAIL;
+  const existing = normalizeEmail_(props.getProperty(key));
+  if (existing && existing !== actor) throw new Error('INSTRUCTOR_EMAIL is already configured for another account.');
+  props.setProperty(key, actor);
+  return { instructorEmail: actor, configured: true };
+}
+
 function getSetupStatus() {
   const actor = requireInstructor_();
   const props = getScriptProperties_();

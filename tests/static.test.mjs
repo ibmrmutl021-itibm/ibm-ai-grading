@@ -11,7 +11,8 @@ expectedSheets.forEach(name => assert.match(schema, new RegExp(`\\b${name}:`), `
 
 const manifest = JSON.parse(await readFile(new URL('../appsscript.json', import.meta.url), 'utf8'));
 assert.equal(manifest.runtimeVersion, 'V8');
-assert.equal(manifest.webapp.executeAs, 'USER_DEPLOYING');
+assert.equal(manifest.webapp.executeAs, 'USER_ACCESSING');
+assert.equal(manifest.executionApi.access, 'MYSELF');
 assert.ok(manifest.dependencies.enabledAdvancedServices.some(service => service.userSymbol === 'Drive' && service.version === 'v3'));
 
 for (const file of files.filter(file => file.endsWith('.gs'))) {
