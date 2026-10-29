@@ -44,6 +44,7 @@
     <section class="card" aria-labelledby="create-title">
       <h2 id="create-title">สร้างรายวิชาที่เปิดสอน / Create offering</h2>
       <form id="offering-form">
+        <input name="offeringId" type="hidden">
         <label>ปีการศึกษา / Academic year<input name="academicYear" required value="2569"></label>
         <label>ภาคเรียน / Term<input name="term" required value="1"></label>
         <label>ชื่อภาคเรียน / Semester label<input name="semesterLabel" required value="1/2569"></label>
@@ -53,13 +54,16 @@
         <label>หน่วยกิต / Credits<input name="credits" required type="number" min="0" max="30" step="0.5" value="3"></label>
         <label>ตอนเรียน / Section<input name="sectionCode" required></label>
         <label>ภาษาเริ่มต้น / Default language<select name="defaultLanguage"><option value="th">ไทย</option><option value="en">English</option></select></label>
-        <button class="wide" type="submit">บันทึก / Save</button>
+        <div class="wide actions">
+          <button id="save-offering" type="submit">บันทึก / Save</button>
+          <button id="cancel-offering-edit" class="secondary" type="button" hidden>ยกเลิกแก้ไข / Cancel</button>
+        </div>
       </form>
       <p id="message" role="status" aria-live="polite"></p>
     </section>
     <section class="card" aria-labelledby="list-title">
       <h2 id="list-title">รายวิชาที่เปิดสอน / Offerings</h2>
-      <div class="table-wrap"><table><thead><tr><th>Semester</th><th>Course</th><th>Name</th><th>Section</th><th>Status</th></tr></thead><tbody id="offerings"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Semester</th><th>Course</th><th>Name</th><th>Section</th><th>Status</th><th>Actions</th></tr></thead><tbody id="offerings"></tbody></table></div>
     </section>
     <section class="card" aria-labelledby="roster-title">
       <h2 id="roster-title">นำเข้ารายชื่อนักศึกษา / Import roster PDF</h2>
@@ -168,24 +172,29 @@
       tbody.replaceChildren();
       (rows || []).forEach(row => {
         const tr = document.createElement('tr');
-        [row.semester && row.semester.label, row.course && row.course.course_code,
-         row.course && (row.course.name_th || row.course.name_en), row.section_code, row.status]
+        [row.semesterLabel, row.courseCode, row.nameTh || row.nameEn, row.sectionCode, row.status]
           .forEach(value => { const td = document.createElement('td'); td.appendChild(text(value)); tr.appendChild(td); });
+        const actions = document.createElement('td'); actions.className = 'actions';
+        const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'secondary'; edit.textContent = 'Edit';
+        edit.addEventListener('click', () => beginOfferingEdit(row));
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Delete';
+        remove.addEventListener('click', () => archiveOffering(row));
+        actions.append(edit, remove); tr.appendChild(actions);
         tbody.appendChild(tr);
       });
     }
     function offeringLabel(row) {
-      return `${row.semester && row.semester.label || ''} · ${row.course && row.course.course_code || ''} · Sec ${row.section_code}`;
+      return `${row.semesterLabel || ''} · ${row.courseCode || ''} · Sec ${row.sectionCode || ''}`;
     }
     function populateOfferings(rows) {
       ['roster-offering','assessment-offering','score-offering','export-offering'].forEach(id => {
         const select = document.getElementById(id); select.replaceChildren();
         (rows || []).forEach(row => {
-          const option = document.createElement('option'); option.value = row.offering_id;
+          const option = document.createElement('option'); option.value = row.offeringId;
           option.appendChild(text(offeringLabel(row))); select.appendChild(option);
         });
       });
-      if (rows && rows.length) loadAssessments(rows[0].offering_id);
+      if (rows && rows.length) loadAssessments(rows[0].offeringId);
     }
     function load() {
       google.script.run.withSuccessHandler(data => {
@@ -268,12 +277,40 @@
       const button = form.querySelector('button');
       button.disabled = true; message.textContent = 'กำลังบันทึก…';
       const payload = Object.fromEntries(new FormData(form).entries());
-      google.script.run.withSuccessHandler(() => {
-        message.textContent = 'บันทึกแล้ว'; form.reset(); button.disabled = false; load();
+      const runner = google.script.run.withSuccessHandler(() => {
+        message.textContent = payload.offeringId ? 'แก้ไขแล้ว' : 'บันทึกแล้ว'; resetOfferingForm(); button.disabled = false; refreshOfferings();
       }).withFailureHandler(error => {
         message.textContent = error.message; button.disabled = false;
-      }).createCourseOffering(payload);
+      });
+      if (payload.offeringId) runner.updateCourseOffering(Object.assign(payload, { reason: 'Instructor edited offering in web UI' }));
+      else runner.createCourseOffering(payload);
     });
+    function refreshOfferings() {
+      google.script.run.withSuccessHandler(rows => { render(rows); populateOfferings(rows); })
+        .withFailureHandler(error => { message.textContent = error.message; }).listCourseOfferings();
+    }
+    function beginOfferingEdit(row) {
+      ['offeringId','academicYear','term','semesterLabel','courseCode','nameTh','nameEn','credits','sectionCode'].forEach(field => {
+        form.elements[field].value = row[field] == null ? '' : row[field];
+      });
+      document.getElementById('save-offering').textContent = 'อัปเดต / Update';
+      document.getElementById('cancel-offering-edit').hidden = false;
+      form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    function resetOfferingForm() {
+      form.reset(); form.elements.offeringId.value = '';
+      document.getElementById('save-offering').textContent = 'บันทึก / Save';
+      document.getElementById('cancel-offering-edit').hidden = true;
+    }
+    document.getElementById('cancel-offering-edit').addEventListener('click', resetOfferingForm);
+    function archiveOffering(row) {
+      if (!window.confirm(`Delete ${row.courseCode} / ${row.sectionCode}? ข้อมูลจะถูก archive และไม่ลบคะแนนย้อนหลัง`)) return;
+      const reason = window.prompt('Delete/archive reason / เหตุผล'); if (!reason) return;
+      google.script.run.withSuccessHandler(() => {
+        message.textContent = 'ลบออกจากรายการแล้ว (archived)'; refreshOfferings();
+      }).withFailureHandler(error => { message.textContent = error.message; })
+        .deleteCourseOffering({ offeringId: row.offeringId, reason });
+    }
     rosterForm.addEventListener('submit', event => {
       event.preventDefault();
       const button = rosterForm.querySelector('button');

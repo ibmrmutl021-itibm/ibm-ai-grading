@@ -21,7 +21,9 @@ function validateOfferingInput_(input) {
 
 function createCourseOffering(input) {
   const actor = requireInstructor_();
-  return createCourseOfferingInternal_(input, actor, openDatabase_());
+  const ss = openDatabase_();
+  const ids = createCourseOfferingInternal_(input, actor, ss);
+  return getCourseOfferingView_(ids.offeringId, ss);
 }
 
 function createCourseOfferingInternal_(input, actor, spreadsheet) {
@@ -56,16 +58,69 @@ function createCourseOfferingInternal_(input, actor, spreadsheet) {
 function listCourseOfferings() {
   requireInstructor_();
   const ss = openDatabase_();
+  return listCourseOfferingViews_(ss, false);
+}
+
+function listCourseOfferingViews_(ss, includeArchived) {
   const semesters = listObjects_('semesters', ss);
   const courses = listObjects_('courses', ss);
   const offerings = listObjects_('course_offerings', ss);
   const semestersById = Object.fromEntries(semesters.map(function(row) { return [row.semester_id, row]; }));
   const coursesById = Object.fromEntries(courses.map(function(row) { return [row.course_id, row]; }));
-  return offerings.map(function(row) {
-    return Object.assign({}, row, {
-      semester: semestersById[row.semester_id] || null,
-      course: coursesById[row.course_id] || null
-    });
+  return offerings.filter(function(row) { return includeArchived || row.status !== 'ARCHIVED'; }).map(function(row) {
+    const semester = semestersById[row.semester_id] || {};
+    const course = coursesById[row.course_id] || {};
+    return {
+      offeringId: String(row.offering_id || ''), semesterId: String(row.semester_id || ''), courseId: String(row.course_id || ''),
+      academicYear: String(semester.academic_year || ''), term: String(semester.term || ''), semesterLabel: String(semester.label || ''),
+      courseCode: String(course.course_code || ''), nameTh: String(course.name_th || ''), nameEn: String(course.name_en || ''),
+      credits: Number(course.credits || 0), sectionCode: String(row.section_code || ''), status: String(row.status || ''),
+      instructorId: String(row.instructor_id || '')
+    };
   });
+}
+
+function getCourseOfferingView_(offeringId, ss) {
+  const view = listCourseOfferingViews_(ss, true).find(function(row) { return row.offeringId === offeringId; });
+  if (!view) throw new Error('Course offering not found.');
+  return view;
+}
+
+function updateCourseOffering(input) {
+  const actor = requireInstructor_();
+  const data = validateOfferingInput_(input);
+  const offeringId = String((input || {}).offeringId || '').trim();
+  if (!offeringId) throw new Error('Offering ID is required.');
+  const ss = openDatabase_();
+  const before = getCourseOfferingView_(offeringId, ss);
+  if (before.status === 'ARCHIVED') throw new Error('Archived offering cannot be edited.');
+  updateObjectByKey_('semesters', 'semester_id', before.semesterId, {
+    academic_year: data.academicYear, term: data.term, label: data.semesterLabel
+  }, ss);
+  updateObjectByKey_('courses', 'course_id', before.courseId, {
+    course_code: data.courseCode, name_th: data.nameTh, name_en: data.nameEn, credits: data.credits
+  }, ss);
+  updateObjectByKey_('course_offerings', 'offering_id', offeringId, {
+    section_code: data.sectionCode
+  }, ss);
+  const after = getCourseOfferingView_(offeringId, ss);
+  writeAudit_('course_offering', offeringId, 'UPDATE', before, after, String(input.reason || 'Instructor edited course offering'), actor, ss);
+  return after;
+}
+
+function deleteCourseOffering(request) {
+  const actor = requireInstructor_();
+  const input = request || {};
+  const offeringId = String(input.offeringId || '').trim();
+  const reason = String(input.reason || '').trim();
+  if (!offeringId) throw new Error('Offering ID is required.');
+  if (!reason) throw new Error('Delete/archive reason is required.');
+  const ss = openDatabase_();
+  const before = getCourseOfferingView_(offeringId, ss);
+  if (before.status === 'ARCHIVED') throw new Error('Course offering is already archived.');
+  updateObjectByKey_('course_offerings', 'offering_id', offeringId, { status: 'ARCHIVED' }, ss);
+  const after = getCourseOfferingView_(offeringId, ss);
+  writeAudit_('course_offering', offeringId, 'ARCHIVE', before, after, reason, actor, ss);
+  return { archived: true, offeringId: offeringId };
 }
 
