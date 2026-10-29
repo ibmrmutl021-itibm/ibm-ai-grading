@@ -62,5 +62,8 @@ assert.ok(inlineScript, 'missing UI script');
 assert.doesNotThrow(() => new Function(inlineScript[1]), 'syntax error in Index.html script');
 const codeSource = await readFile(new URL('../Code.gs', import.meta.url), 'utf8');
 assert.match(codeSource, /function initializeApplicationStorage\s*\(/);
+const courseSource = await readFile(new URL('../CourseService.gs', import.meta.url), 'utf8');
+const courseFns = new Function(`${courseSource}; return { formatSemesterLabel_ };`)();
+assert.equal(courseFns.formatSemesterLabel_('1', '2569', new Date()), '1/2569');
 console.log(`Build 2 static checks passed (${required.length} files, ${expectedSheets.length} sheets, roster and score fixtures).`);
 

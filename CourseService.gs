@@ -70,14 +70,23 @@ function listCourseOfferingViews_(ss, includeArchived) {
   return offerings.filter(function(row) { return includeArchived || row.status !== 'ARCHIVED'; }).map(function(row) {
     const semester = semestersById[row.semester_id] || {};
     const course = coursesById[row.course_id] || {};
+    const academicYear = String(semester.academic_year || '').trim();
+    const term = String(semester.term || '').trim();
     return {
       offeringId: String(row.offering_id || ''), semesterId: String(row.semester_id || ''), courseId: String(row.course_id || ''),
-      academicYear: String(semester.academic_year || ''), term: String(semester.term || ''), semesterLabel: String(semester.label || ''),
+      academicYear: academicYear, term: term, semesterLabel: formatSemesterLabel_(term, academicYear, semester.label),
       courseCode: String(course.course_code || ''), nameTh: String(course.name_th || ''), nameEn: String(course.name_en || ''),
       credits: Number(course.credits || 0), sectionCode: String(row.section_code || ''), status: String(row.status || ''),
       instructorId: String(row.instructor_id || '')
     };
   });
+}
+
+function formatSemesterLabel_(term, academicYear, storedLabel) {
+  const normalizedTerm = String(term || '').trim();
+  const normalizedYear = String(academicYear || '').trim();
+  if (normalizedTerm && normalizedYear) return normalizedTerm + '/' + normalizedYear;
+  return storedLabel instanceof Date ? '' : String(storedLabel || '').trim();
 }
 
 function getCourseOfferingView_(offeringId, ss) {

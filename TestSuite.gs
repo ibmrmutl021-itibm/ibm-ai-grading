@@ -19,6 +19,7 @@ function runBuild2SelfTests() {
       nameTh: 'ข้อมูลสังเคราะห์', nameEn: 'Synthetic Test', credits: 3, sectionCode: '01'
     }, actor, tempSpreadsheet);
     results.push(testResult_('course offering is created', Boolean(ids.offeringId) && listObjects_('course_offerings', tempSpreadsheet).length === 1));
+    results.push(testResult_('semester label remains term/year text', getCourseOfferingView_(ids.offeringId, tempSpreadsheet).semesterLabel === '1/2569'));
     results.push(testResult_('creation is audited', listObjects_('audit_log', tempSpreadsheet).length === 1));
     const parsed = parseRosterText_('1 68123456789 นายทดสอบ หนึ่ง\n2 68541206308-1 นางสาวทดสอบ สอง ถอนวิชา(W)');
     results.push(testResult_('roster parser preserves IDs as strings', parsed.length === 2 && parsed[0].studentId === '68123456789'));

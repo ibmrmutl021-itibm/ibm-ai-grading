@@ -23,7 +23,7 @@ function initializeSheets_(spreadsheet) {
       .setBackground('#0f62fe')
       .setFontColor('#ffffff');
     headers.forEach(function(header, index) {
-      if (header === 'student_id' || /_id$/.test(header)) {
+      if (isPlainTextHeader_(header)) {
         sheet.getRange(2, index + 1, Math.max(1, sheet.getMaxRows() - 1), 1).setNumberFormat('@');
       }
     });
@@ -57,7 +57,11 @@ function appendObjects_(sheetName, records, spreadsheet) {
   lock.waitLock(APP_CONFIG.LOCK_TIMEOUT_MS);
   try {
     const sheet = getSheet_(sheetName, spreadsheet);
-    sheet.getRange(sheet.getLastRow() + 1, 1, values.length, headers.length).setValues(values);
+    const startRow = sheet.getLastRow() + 1;
+    headers.forEach(function(header, index) {
+      if (isPlainTextHeader_(header)) sheet.getRange(startRow, index + 1, values.length, 1).setNumberFormat('@');
+    });
+    sheet.getRange(startRow, 1, values.length, headers.length).setValues(values);
   } finally {
     lock.releaseLock();
   }
@@ -101,11 +105,18 @@ function updateObjectByKey_(sheetName, key, value, changes, spreadsheet) {
       result[header] = values[rowIndex][index]; return result;
     }, {});
     const after = Object.assign({}, before, changes);
+    headers.forEach(function(header, index) {
+      if (isPlainTextHeader_(header)) sheet.getRange(rowIndex + 2, index + 1).setNumberFormat('@');
+    });
     sheet.getRange(rowIndex + 2, 1, 1, headers.length).setValues([headers.map(function(header) { return after[header]; })]);
     return { before: before, after: after };
   } finally {
     lock.releaseLock();
   }
+}
+
+function isPlainTextHeader_(header) {
+  return /_id$/.test(header) || ['student_id', 'academic_year', 'term', 'label', 'course_code', 'section_code'].indexOf(header) >= 0;
 }
 
 function upsertSetting_(key, value, spreadsheet) {
