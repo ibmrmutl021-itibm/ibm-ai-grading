@@ -74,10 +74,16 @@ function listObjects_(sheetName, spreadsheet) {
   if (sheet.getLastRow() < 2) return [];
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function(row) {
     return headers.reduce(function(result, header, index) {
-      result[header] = row[index];
+      result[header] = normalizeCellValue_(row[index]);
       return result;
     }, {});
   });
+}
+
+function normalizeCellValue_(value) {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'number' && !Number.isFinite(value)) return null;
+  return value;
 }
 
 function findObjectBy_(sheetName, key, value, spreadsheet) {
@@ -116,7 +122,7 @@ function updateObjectByKey_(sheetName, key, value, changes, spreadsheet) {
 }
 
 function isPlainTextHeader_(header) {
-  return /_id$/.test(header) || ['student_id', 'academic_year', 'term', 'label', 'course_code', 'section_code'].indexOf(header) >= 0;
+  return /_id$/.test(header) || ['student_id', 'academic_year', 'term', 'label', 'course_code', 'section_code', 'document_date'].indexOf(header) >= 0;
 }
 
 function upsertSetting_(key, value, spreadsheet) {

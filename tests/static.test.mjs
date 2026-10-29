@@ -35,8 +35,17 @@ const roster51 = Array.from({length: 51}, (_, index) => `${index + 1} ${index ==
 const parsed51 = rosterFns.parseRosterText_(roster51);
 assert.equal(parsed51.length, 51);
 assert.equal(parsed51.filter(row => row.parsedStatus === 'WITHDRAWN_PROPOSED').length, 1);
+const multilineRoster = [
+  '1', '68123456789', '', 'นางสาวทดสอบ หนึ่ง', 'ช่องลงชื่อ', '',
+  '2', '68123456790', '', 'นายทดสอบ สอง', 'ช่องลงชื่อ'
+].join('\n');
+const parsedMultiline = rosterFns.parseRosterText_(multilineRoster);
+assert.equal(parsedMultiline.length, 2);
+assert.equal(parsedMultiline[0].parsedName, 'นางสาวทดสอบ หนึ่ง');
+assert.equal(parsedMultiline[1].parsedName, 'นายทดสอบ สอง');
 
 const importSource = await readFile(new URL('../ImportService.gs', import.meta.url), 'utf8');
+const identitySource = await readFile(new URL('../IdentityMatchService.gs', import.meta.url), 'utf8');
 const importFns = new Function(`${importSource}; return { parseImportedScore_, makeUniqueHeaders_ };`)();
 assert.deepEqual(importFns.parseImportedScore_('', ''), { numericScore: null, state: 'MISSING' });
 assert.deepEqual(importFns.parseImportedScore_('Viewed', ''), { numericScore: null, state: 'VIEWED' });
@@ -44,7 +53,23 @@ assert.deepEqual(importFns.parseImportedScore_('0', ''), { numericScore: 0, stat
 assert.deepEqual(importFns.parseImportedScore_('', 'Unexpected'), { numericScore: null, state: 'REVIEW_REQUIRED' });
 assert.deepEqual(importFns.makeUniqueHeaders_(['Name', 'Name', '']), ['Name', 'Name (2)', 'Column 3']);
 
-const identitySource = await readFile(new URL('../IdentityMatchService.gs', import.meta.url), 'utf8');
+let uuidCounter = 0;
+const assessmentFixtures = Array.from({length: 7}, (_, index) => ({assessment_id:`A${index + 1}`,offering_id:'O1',name:`Hw${index + 1}`,maximum_score:10}));
+const listObjectsStub = sheet => ({
+  enrollments:[{offering_id:'O1',student_id:'00000000001'}],
+  students:[{student_id:'00000000001',official_name_th:'นักศึกษา ทดสอบ',official_name_en_nullable:'Test Student'}],
+  student_aliases:[],assessments:assessmentFixtures
+}[sheet] || []);
+const combinedImportFns = new Function('listObjects_','newUuid_','normalizeName_',`${identitySource}\n${importSource}; return { normalizeScoreRows_, validateImportMapping_ };`)(
+  listObjectsStub, () => `U${++uuidCounter}`, value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s.,'"()-]+/g,'')
+);
+const wideMapping = {layout:'WIDE',studentIdColumn:'Student ID',nameColumn:'Name',emailColumn:'',statusColumn:'',scoreColumns:assessmentFixtures.map(a=>({column:a.name,assessmentId:a.assessment_id}))};
+assert.doesNotThrow(()=>combinedImportFns.validateImportMapping_(wideMapping,['Student ID','Name',...assessmentFixtures.map(a=>a.name)],{},'O1'));
+const normalizedWide = combinedImportFns.normalizeScoreRows_({batch_id:'B1',offering_id:'O1'},{headers:['Student ID','Name',...assessmentFixtures.map(a=>a.name)],rows:[['00000000001','นักศึกษา ทดสอบ',0,1,2,3,4,5,'Viewed']]},wideMapping,{});
+assert.equal(normalizedWide.length,7);
+assert.equal(JSON.parse(normalizedWide[0].parsed_json).numericScore,0);
+assert.equal(JSON.parse(normalizedWide[6].parsed_json).scoreState,'VIEWED');
+
 const identityFns = new Function(`${identitySource}; return { nameSimilarity_, levenshteinDistance_ };`)();
 assert.equal(identityFns.levenshteinDistance_('kitten', 'sitting'), 3);
 assert.equal(identityFns.nameSimilarity_('สมชาย', 'สมชาย'), 1);
@@ -65,5 +90,19 @@ assert.match(codeSource, /function initializeApplicationStorage\s*\(/);
 const courseSource = await readFile(new URL('../CourseService.gs', import.meta.url), 'utf8');
 const courseFns = new Function(`${courseSource}; return { formatSemesterLabel_ };`)();
 assert.equal(courseFns.formatSemesterLabel_('1', '2569', new Date()), '1/2569');
+const sheetsSource = await readFile(new URL('../SheetsRepo.gs', import.meta.url), 'utf8');
+const sheetsFns = new Function(`${sheetsSource}; return { normalizeCellValue_, isPlainTextHeader_ };`)();
+assert.equal(sheetsFns.normalizeCellValue_(new Date('2026-10-01T00:00:00.000Z')), '2026-10-01T00:00:00.000Z');
+assert.equal(sheetsFns.isPlainTextHeader_('document_date'), true);
+const configSource = await readFile(new URL('../Config.gs', import.meta.url), 'utf8');
+const configFns = new Function(`${configSource}; return { bytesStartWithAscii_ };`)();
+assert.equal(configFns.bytesStartWithAscii_([37,80,68,70,45],'%PDF-'),true);
+assert.equal(configFns.bytesStartWithAscii_([80,75],'PK'),true);
+assert.equal(configFns.bytesStartWithAscii_([0,1,2],'%PDF-'),false);
+for (const [file, functionName] of [['RosterService.gs','uploadRosterFile'],['ImportService.gs','uploadScoreFile'],['ImportService.gs','configureScoreImport'],['GradebookService.gs','commitScoreImport']]) {
+  const source = await readFile(new URL(`../${file}`, import.meta.url), 'utf8');
+  const body = source.match(new RegExp(`function ${functionName}\\([^)]*\\) \\{([\\s\\S]*?)(?=\\n\\})`));
+  assert.ok(body && body[1].includes('requireInstructor_()'), `${functionName} must enforce instructor auth`);
+}
 console.log(`Build 2 static checks passed (${required.length} files, ${expectedSheets.length} sheets, roster and score fixtures).`);
 

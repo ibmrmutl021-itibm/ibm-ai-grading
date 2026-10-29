@@ -70,10 +70,14 @@ The manifest requests Drive, Docs, Sheets, and active-user email scopes. Drive A
 - A student missing from a later roster becomes `PENDING_VERIFICATION`, never automatic W.
 - Official names are not silently overwritten when a later roster differs.
 - Confirmed aliases record actor, timestamp, type and scope.
+- Roster parser v2 supports names split onto later lines by Google Docs table conversion.
+- Re-uploading the same source is idempotent; an older parser result is reprocessed against the preserved raw file without creating another raw-file copy.
+- The web UI can recover the latest completed roster result after a browser callback or network interruption.
 
 ## Build 2 behavior
 
 - Accepts Teams or generic CSV/XLSX files up to 10 MB; source files are stored privately with SHA-256 duplicate detection.
+- CSV/XLSX conversion reports progress, retries temporary conversion reads with capped backoff, and can reopen an existing duplicate batch instead of silently importing it again.
 - Supports long and wide layouts with instructor-controlled column mapping.
 - Exact validated Student ID is matched first, followed by confirmed alias and unique exact normalized name.
 - Fuzzy suggestions are never committed until the instructor explicitly confirms a student in the selected offering.

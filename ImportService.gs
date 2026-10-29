@@ -28,6 +28,7 @@ function listImportAssessments(offeringId) {
 }
 
 function uploadScoreFile(request) {
+  const startedMs = Date.now();
   const actor = requireInstructor_();
   const input = request || {};
   if (SCORE_IMPORT_TYPES.indexOf(input.importType) < 0) throw new Error('Invalid score import type.');
@@ -37,8 +38,7 @@ function uploadScoreFile(request) {
   const bytes = decodeUpload_(input.base64Data);
   if (!bytes.length || bytes.length > APP_CONFIG.MAX_SCORE_UPLOAD_BYTES) throw new Error('Score file must be between 1 byte and 10 MB.');
   if (extension === 'xlsx') {
-    const signature = bytes.slice(0, 2).map(function(value) { return String.fromCharCode((value + 256) % 256); }).join('');
-    if (signature !== 'PK') throw new Error('File content is not a valid XLSX container.');
+    if (!bytesStartWithAscii_(bytes, 'PK')) throw new Error('File content is not a valid XLSX container.');
   }
   const ss = openDatabase_();
   const context = getOfferingContext_(input.offeringId, ss);
@@ -46,7 +46,22 @@ function uploadScoreFile(request) {
   const duplicate = listObjects_('import_batches', ss).find(function(row) {
     return row.offering_id === input.offeringId && row.sha256 === hash && row.status !== 'ROLLED_BACK';
   });
-  if (duplicate) return { duplicate: true, existingBatchId: duplicate.batch_id, message: 'This exact file was already imported for the selected offering.' };
+  if (duplicate) {
+    const duplicateResult = {
+      duplicate: true, existingBatchId: duplicate.batch_id, status: duplicate.status,
+      message: 'This exact file was already imported for the selected offering.'
+    };
+    if (duplicate.status === 'UPLOADED') {
+      const duplicateMatrix = readTabularScoreFile_(bytes, extension, filename);
+      duplicateResult.headers = makeUniqueHeaders_(duplicateMatrix[0] || []);
+      const duplicateRows = duplicateMatrix.slice(1).filter(function(row) { return row.some(function(value) { return String(value).trim() !== ''; }); });
+      duplicateResult.preview = duplicateRows.slice(0, 10);
+      duplicateResult.rowCount = duplicateRows.length;
+    } else {
+      duplicateResult.review = getImportReviewInternal_(duplicate.batch_id, ss);
+    }
+    return duplicateResult;
+  }
 
   const matrix = readTabularScoreFile_(bytes, extension, filename);
   if (!matrix.length || !matrix[0].length) throw new Error('The score file contains no tabular data.');
@@ -61,8 +76,9 @@ function uploadScoreFile(request) {
     status: 'UPLOADED', created_at: nowIso_()
   };
   appendObjects_('import_batches', [batch], ss);
-  writeAudit_('import_batch', batch.batch_id, 'UPLOAD', null, { filename: filename, sha256: hash, rowCount: dataRows.length, sourceFileId: sourceFile.getId() }, 'Immutable score source uploaded', actor, ss);
-  return { duplicate: false, batchId: batch.batch_id, headers: headers, preview: dataRows.slice(0, 10), rowCount: dataRows.length };
+  const processingMs = Date.now() - startedMs;
+  writeAudit_('import_batch', batch.batch_id, 'UPLOAD', null, { filename: filename, sha256: hash, rowCount: dataRows.length, sourceFileId: sourceFile.getId(), processingMs: processingMs }, 'Immutable score source uploaded', actor, ss);
+  return { duplicate: false, batchId: batch.batch_id, headers: headers, preview: dataRows.slice(0, 10), rowCount: dataRows.length, processingMs: processingMs };
 }
 
 function configureScoreImport(request) {
@@ -217,7 +233,19 @@ function readTabularScoreFile_(bytes, extension, filename) {
     const converted = Drive.Files.create({ name: 'TEMP_SCORE_' + newUuid_(), mimeType: 'application/vnd.google-apps.spreadsheet' },
       Utilities.newBlob(bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename), { fields: 'id' });
     convertedId = converted.id;
-    return SpreadsheetApp.openById(convertedId).getSheets()[0].getDataRange().getDisplayValues();
+    let lastError;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const spreadsheet = SpreadsheetApp.openById(convertedId);
+        const sheets = spreadsheet.getSheets();
+        if (!sheets.length) throw new Error('Converted XLSX contains no worksheets.');
+        return sheets[0].getDataRange().getDisplayValues();
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < 4) Utilities.sleep(Math.min(4000, 500 * Math.pow(2, attempt)));
+    }
+    throw lastError || new Error('Unable to read converted XLSX file.');
   } finally {
     if (convertedId) DriveApp.getFileById(convertedId).setTrashed(true);
   }

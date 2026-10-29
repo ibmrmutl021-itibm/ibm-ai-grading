@@ -2,6 +2,7 @@ const ROSTER_TYPES = Object.freeze(['ROSTER_CLASSROOM', 'ROSTER_EXAM']);
 const ENROLLMENT_STATUSES = Object.freeze(['ACTIVE', 'WITHDRAWN', 'PENDING_VERIFICATION']);
 
 function uploadRosterFile(request) {
+  const startedMs = Date.now();
   const actor = requireInstructor_();
   const input = request || {};
   if (ROSTER_TYPES.indexOf(input.rosterType) < 0) throw new Error('Invalid roster type.');
@@ -10,20 +11,33 @@ function uploadRosterFile(request) {
   if (!filename.toLowerCase().endsWith('.pdf')) throw new Error('Build 1 accepts PDF roster files only.');
   const bytes = decodeUpload_(input.base64Data);
   if (!bytes.length || bytes.length > APP_CONFIG.MAX_ROSTER_UPLOAD_BYTES) throw new Error('Roster PDF must be between 1 byte and 10 MB.');
-  const signature = bytes.slice(0, 5).map(function(value) { return String.fromCharCode((value + 256) % 256); }).join('');
-  if (signature !== '%PDF-') throw new Error('File content is not a valid PDF.');
+  if (!bytesStartWithAscii_(bytes, '%PDF-')) throw new Error('File content is not a valid PDF.');
 
   const ss = openDatabase_();
   const context = getOfferingContext_(input.offeringId, ss);
-  const folders = createOfferingDriveLayout_(context.semester.academic_year, context.semester.term, context.course.course_code, context.offering.section_code);
   const blob = Utilities.newBlob(bytes, 'application/pdf', filename);
-  const sourceFile = folders.rosters.createFile(blob);
   const hash = sha256Hex_(bytes);
+  const priorUpload = findRosterUploadByHash_(input.offeringId, hash, ss);
+  if (priorUpload && priorUpload.parserVersion === APP_CONFIG.ROSTER_PARSER_VERSION) {
+    const existingReview = getRosterReviewInternal_(priorUpload.rosterVersionId, ss, '');
+    existingReview.duplicate = true;
+    existingReview.message = 'This exact roster file was already processed with the current parser.';
+    return existingReview;
+  }
+  let sourceFile;
+  let auditAction = 'UPLOAD_AND_EXTRACT';
+  if (priorUpload && priorUpload.sourceFileId) {
+    sourceFile = DriveApp.getFileById(priorUpload.sourceFileId);
+    auditAction = 'REPROCESS_WITH_NEW_PARSER';
+  } else {
+    const folders = createOfferingDriveLayout_(context.semester.academic_year, context.semester.term, context.course.course_code, context.offering.section_code);
+    sourceFile = folders.rosters.createFile(blob);
+  }
   const rosterVersionId = newUuid_();
   let parsedRows = [];
   let extractionError = '';
   try {
-    parsedRows = parseRosterText_(extractPdfText_(blob));
+    parsedRows = parseRosterText_(extractPdfText_(sourceFile.getBlob()));
   } catch (error) {
     extractionError = String(error && error.message || error);
   }
@@ -44,12 +58,36 @@ function uploadRosterFile(request) {
       parsed_status: row.parsedStatus, page_number: row.pageNumber, confidence_flag: row.confidenceFlag
     };
   }), ss);
-  writeAudit_('roster_version', rosterVersionId, 'UPLOAD_AND_EXTRACT', null, {
+  writeAudit_('roster_version', rosterVersionId, auditAction, null, {
     offeringId: context.offering.offering_id, rosterType: input.rosterType, sourceFileId: sourceFile.getId(),
     sha256: hash, parserVersion: APP_CONFIG.ROSTER_PARSER_VERSION, rowCount: parsedRows.length,
-    extractionError: extractionError || null
+    extractionError: extractionError || null, processingMs: Date.now() - startedMs
   }, 'Roster source preserved before instructor review', actor, ss);
-  return getRosterReviewInternal_(rosterVersionId, ss, extractionError);
+  const review = getRosterReviewInternal_(rosterVersionId, ss, extractionError);
+  review.reprocessed = Boolean(priorUpload);
+  review.processingMs = Date.now() - startedMs;
+  return review;
+}
+
+function findRosterUploadByHash_(offeringId, hash, ss) {
+  const audits = listObjects_('audit_log', ss).filter(function(row) {
+    return row.entity === 'roster_version' && ['UPLOAD_AND_EXTRACT', 'REPROCESS_WITH_NEW_PARSER'].indexOf(row.action) >= 0;
+  }).reverse();
+  for (let index = 0; index < audits.length; index += 1) {
+    try {
+      const details = JSON.parse(audits[index].after_json || '{}');
+      if (details.offeringId === offeringId && details.sha256 === hash) {
+        return {
+          rosterVersionId: audits[index].entity_id,
+          sourceFileId: details.sourceFileId,
+          parserVersion: details.parserVersion
+        };
+      }
+    } catch (error) {
+      // Ignore malformed historical audit JSON and continue searching.
+    }
+  }
+  return null;
 }
 
 function getRosterReview(rosterVersionId) {
@@ -75,6 +113,16 @@ function listRosterVersions(offeringId) {
   return listObjects_('roster_versions', openDatabase_()).filter(function(row) {
     return row.offering_id === offeringId;
   }).sort(function(a, b) { return String(b.uploaded_at).localeCompare(String(a.uploaded_at)); });
+}
+
+function getLatestRosterReview(offeringId) {
+  requireInstructor_();
+  const ss = openDatabase_();
+  const latest = listObjects_('roster_versions', ss).filter(function(row) {
+    return row.offering_id === offeringId;
+  }).sort(function(a, b) { return String(b.uploaded_at).localeCompare(String(a.uploaded_at)); })[0];
+  if (!latest) throw new Error('No roster upload found for this offering.');
+  return getRosterReviewInternal_(latest.roster_version_id, ss, '');
 }
 
 function compareRosterVersionInternal_(version, entries, ss) {
@@ -226,7 +274,18 @@ function extractPdfText_(blob) {
   try {
     const converted = Drive.Files.create({ name: 'TEMP_ROSTER_OCR_' + newUuid_(), mimeType: 'application/vnd.google-apps.document' }, blob, { fields: 'id' });
     convertedId = converted.id;
-    return DocumentApp.openById(convertedId).getBody().getText();
+    let lastError;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const text = DocumentApp.openById(convertedId).getBody().getText();
+        if (text) return text;
+        lastError = new Error('Converted document contains no text.');
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < 4) Utilities.sleep(Math.min(4000, 500 * Math.pow(2, attempt)));
+    }
+    throw lastError || new Error('Unable to read converted roster document.');
   } finally {
     if (convertedId) DriveApp.getFileById(convertedId).setTrashed(true);
   }
@@ -236,15 +295,22 @@ function parseRosterText_(text) {
   const rows = [];
   const pages = String(text || '').split('\f');
   pages.forEach(function(page, pageIndex) {
-    page.split(/\r?\n/).forEach(function(rawLine, lineIndex) {
-      const line = rawLine.replace(/\s+/g, ' ').trim();
+    const lines = page.split(/\r?\n/).map(function(rawLine) { return rawLine.replace(/\s+/g, ' ').trim(); });
+    lines.forEach(function(line, lineIndex) {
       const match = line.match(/(?:^|\s)(\d{8,13}(?:-\d)?)(?=\s|$)/);
       if (!match) return;
       const studentId = match[1];
-      const afterId = line.slice(match.index + match[0].length).trim();
-      const explicitW = /ถอนวิชา\s*\(?W\)?/i.test(line) || /\(W\)/i.test(line);
-      const rawRemark = explicitW ? (line.match(/ถอนวิชา\s*\(?W\)?|\(W\)/i) || ['W'])[0] : '';
-      const parsedName = afterId.replace(/ถอนวิชา\s*\(?W\)?|\(W\)/ig, '').replace(/\s+(?:active|enrolled)$/i, '').trim();
+      const sameLine = line.slice(match.index + match[0].length).trim();
+      const segment = [sameLine];
+      for (let next = lineIndex + 1; next < lines.length; next += 1) {
+        if (/(?:^|\s)\d{8,13}(?:-\d)?(?=\s|$)/.test(lines[next])) break;
+        if (lines[next]) segment.push(lines[next]);
+        if (segment.length >= 20) break;
+      }
+      const segmentText = segment.join(' ').trim();
+      const explicitW = /ถอนวิชา\s*\(?W\)?/i.test(segmentText) || /\(W\)/i.test(segmentText);
+      const rawRemark = explicitW ? (segmentText.match(/ถอนวิชา\s*\(?W\)?|\(W\)/i) || ['W'])[0] : '';
+      const parsedName = extractRosterName_(segment);
       rows.push({
         rowNumber: lineIndex + 1, studentId: studentId, parsedName: parsedName,
         rawRemark: rawRemark, parsedStatus: explicitW ? 'WITHDRAWN_PROPOSED' : 'ACTIVE_PROPOSED',
@@ -257,6 +323,21 @@ function parseRosterText_(text) {
     if (counts[row.studentId] > 1) row.confidenceFlag = 'REVIEW_REQUIRED:DUPLICATE_ID';
   });
   return rows;
+}
+
+function extractRosterName_(segments) {
+  const cleaned = (segments || []).map(function(value) {
+    return String(value || '').replace(/ถอนวิชา\s*\(?W\)?|\(W\)/ig, '').replace(/\s+(?:active|enrolled)$/i, '').trim();
+  }).filter(Boolean);
+  const titled = cleaned.find(function(value) {
+    return /^(?:นาย|นางสาว|นาง|เด็กชาย|เด็กหญิง|Mr\.?|Mrs\.?|Miss\.?|Ms\.?)\s*/i.test(value);
+  });
+  if (titled) return titled;
+  return cleaned.find(function(value) {
+    if (/^\d+$/.test(value) || value.length < 3) return false;
+    if (/^(?:เดือน|วันที่|คาบ|ลำดับ|หน้าที่|หมายเหตุ)/.test(value)) return false;
+    return /^[\p{L}.' -]+$/u.test(value) && value.split(/\s+/).length >= 2;
+  }) || '';
 }
 
 function decodeUpload_(base64Data) {

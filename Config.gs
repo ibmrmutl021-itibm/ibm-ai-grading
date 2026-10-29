@@ -6,7 +6,7 @@ const APP_CONFIG = Object.freeze({
   ROOT_FOLDER_NAME: 'IBM_Grading_Center',
   LOCK_TIMEOUT_MS: 30000,
   MAX_ROSTER_UPLOAD_BYTES: 10 * 1024 * 1024,
-  ROSTER_PARSER_VERSION: 'roster-regex-v1',
+  ROSTER_PARSER_VERSION: 'roster-regex-v2',
   SCORE_PARSER_VERSION: 'score-tabular-v1',
   MAX_SCORE_UPLOAD_BYTES: 10 * 1024 * 1024,
   PROPERTY_KEYS: Object.freeze({
@@ -44,5 +44,12 @@ function nowIso_() {
 
 function newUuid_() {
   return Utilities.getUuid();
+}
+
+function bytesStartWithAscii_(bytes, signature) {
+  if (!bytes || bytes.length < signature.length) return false;
+  return signature.split('').every(function(character, index) {
+    return (bytes[index] + 256) % 256 === character.charCodeAt(0);
+  });
 }
 

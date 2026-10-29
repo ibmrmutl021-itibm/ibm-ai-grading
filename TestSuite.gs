@@ -24,6 +24,8 @@ function runBuild2SelfTests() {
     const parsed = parseRosterText_('1 68123456789 นายทดสอบ หนึ่ง\n2 68541206308-1 นางสาวทดสอบ สอง ถอนวิชา(W)');
     results.push(testResult_('roster parser preserves IDs as strings', parsed.length === 2 && parsed[0].studentId === '68123456789'));
     results.push(testResult_('explicit W is only proposed', parsed[1].parsedStatus === 'WITHDRAWN_PROPOSED'));
+    const multiline = parseRosterText_('1\n68123456789\nนางสาวทดสอบ หนึ่ง\nช่องลงชื่อ\n2\n68123456790\nนายทดสอบ สอง');
+    results.push(testResult_('multiline converted PDF rows retain names', multiline.length === 2 && multiline[0].parsedName === 'นางสาวทดสอบ หนึ่ง' && multiline[1].parsedName === 'นายทดสอบ สอง'));
     const firstVersion = syntheticRosterVersion_(ids.offeringId, 'ROSTER_CLASSROOM', true);
     const secondVersion = syntheticRosterVersion_(ids.offeringId, 'ROSTER_EXAM', false);
     appendObjects_('roster_versions', [firstVersion, secondVersion], tempSpreadsheet);

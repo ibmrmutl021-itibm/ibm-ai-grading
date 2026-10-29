@@ -76,6 +76,7 @@
         <button class="wide" type="submit">อัปโหลดและแยกข้อมูล / Upload &amp; extract</button>
       </form>
       <p id="roster-message" role="status" aria-live="polite"></p>
+      <button id="recover-roster" type="button" class="secondary">เรียกผลล่าสุด / Recover latest result</button>
       <div id="roster-review" hidden>
         <div class="actions"><a id="source-link" target="_blank" rel="noopener">เปิดไฟล์ต้นฉบับ / Open source</a></div>
         <div class="table-wrap"><table><thead><tr><th>ID</th><th>Parsed name</th><th>Page/row</th><th>Change</th><th>Remark/review</th><th>Decision</th><th>Correction</th></tr></thead><tbody id="roster-rows"></tbody></table></div>
@@ -165,6 +166,8 @@
     let activeScoreBatchId = '';
     let activeScoreHeaders = [];
     let activeAssessments = [];
+    let rosterProgressTimer = null;
+    let scoreProgressTimer = null;
     const setupCard = document.getElementById('setup-card');
     const applicationContent = document.getElementById('application-content');
     function text(value) { return document.createTextNode(value == null ? '' : String(value)); }
@@ -268,9 +271,10 @@
         tr.appendChild(correctionCell); rosterRows.appendChild(tr);
       });
       rosterReview.hidden = false;
-      rosterMessage.textContent = data.extractionError
-        ? `เก็บไฟล์ต้นฉบับแล้ว แต่ extraction ต้องตรวจแก้: ${data.extractionError}`
-        : `พบ ${data.entries.length} รายการ กรุณาตรวจต้นฉบับก่อนอนุมัติ`;
+      if (data.extractionError) rosterMessage.textContent = `เก็บไฟล์ต้นฉบับแล้ว แต่ extraction ต้องตรวจแก้: ${data.extractionError}`;
+      else if (data.duplicate) rosterMessage.textContent = `${data.message} พบ ${data.entries.length} รายการ`;
+      else if (data.reprocessed) rosterMessage.textContent = `ประมวลผลไฟล์เดิมใหม่ด้วย parser ล่าสุด พบ ${data.entries.length} รายการ`;
+      else rosterMessage.textContent = `พบ ${data.entries.length} รายการ กรุณาตรวจต้นฉบับก่อนอนุมัติ${data.processingMs ? ` (${(data.processingMs/1000).toFixed(1)} วินาที)` : ''}`;
     }
     form.addEventListener('submit', event => {
       event.preventDefault();
@@ -316,16 +320,27 @@
       const button = rosterForm.querySelector('button');
       const values = new FormData(rosterForm); const file = values.get('file');
       if (!file || !file.size) return;
+      if (file.size > 10 * 1024 * 1024) { rosterMessage.textContent = 'ไฟล์ต้องมีขนาดไม่เกิน 10 MB'; return; }
       button.disabled = true; rosterMessage.textContent = 'กำลังอัปโหลดและแยกข้อความ…'; rosterReview.hidden = true;
+      clearTimeout(rosterProgressTimer);
+      rosterProgressTimer = setTimeout(() => { rosterMessage.textContent = 'ยังประมวลผลอยู่ กรุณารอสักครู่ หรือใช้ Recover latest result หากการเชื่อมต่อหลุด'; }, 10000);
       const reader = new FileReader();
       reader.onload = () => google.script.run.withSuccessHandler(data => {
-        button.disabled = false; renderRosterReview(data);
+        clearTimeout(rosterProgressTimer); button.disabled = false; renderRosterReview(data);
       }).withFailureHandler(error => {
-        button.disabled = false; rosterMessage.textContent = error.message;
+        clearTimeout(rosterProgressTimer); button.disabled = false; rosterMessage.textContent = error.message;
       }).uploadRosterFile({ offeringId: values.get('offeringId'), rosterType: values.get('rosterType'),
         documentDate: values.get('documentDate'), filename: file.name, base64Data: reader.result });
-      reader.onerror = () => { button.disabled = false; rosterMessage.textContent = 'อ่านไฟล์ไม่สำเร็จ'; };
+      reader.onerror = () => { clearTimeout(rosterProgressTimer); button.disabled = false; rosterMessage.textContent = 'อ่านไฟล์ไม่สำเร็จ'; };
       reader.readAsDataURL(file);
+    });
+    document.getElementById('recover-roster').addEventListener('click', event => {
+      const offeringId = document.getElementById('roster-offering').value;
+      if (!offeringId) { rosterMessage.textContent = 'กรุณาเลือก Offering'; return; }
+      event.currentTarget.disabled = true; rosterMessage.textContent = 'กำลังเรียกผลล่าสุด…';
+      google.script.run.withSuccessHandler(data => { event.currentTarget.disabled = false; renderRosterReview(data); })
+        .withFailureHandler(error => { event.currentTarget.disabled = false; rosterMessage.textContent = error.message; })
+        .getLatestRosterReview(offeringId);
     });
     document.getElementById('approve-roster').addEventListener('click', event => {
       const decisions = {};
@@ -375,18 +390,25 @@
     document.getElementById('score-upload-form').addEventListener('submit', event => {
       event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button');
       const values=new FormData(form); const file=values.get('file'); if (!file || !file.size) return;
+      if (file.size > 10 * 1024 * 1024) { document.getElementById('score-message').textContent='ไฟล์ต้องมีขนาดไม่เกิน 10 MB'; return; }
       button.disabled=true; document.getElementById('score-message').textContent='กำลังอ่านไฟล์…';
+      clearTimeout(scoreProgressTimer);
+      scoreProgressTimer=setTimeout(()=>{document.getElementById('score-message').textContent='ยังประมวลผลไฟล์คะแนนอยู่ กรุณารอสักครู่';},10000);
       const selectedOffering=values.get('offeringId');
       const reader=new FileReader(); reader.onload=()=>google.script.run.withSuccessHandler(data => {
-        button.disabled=false;
-        if (data.duplicate) { document.getElementById('score-message').textContent=`ไฟล์ซ้ำกับ batch ${data.existingBatchId}`; return; }
-        activeScoreBatchId=data.batchId; activeScoreHeaders=data.headers;
+        clearTimeout(scoreProgressTimer); button.disabled=false;
+        if (data.duplicate) {
+          activeScoreBatchId=data.existingBatchId;
+          if (data.review) { renderScoreReview(data.review); document.getElementById('score-message').textContent=`ไฟล์ซ้ำกับ batch ${data.existingBatchId} (${data.status})`; return; }
+          if (!data.headers) { document.getElementById('score-message').textContent=`ไฟล์ซ้ำกับ batch ${data.existingBatchId}`; return; }
+        } else activeScoreBatchId=data.batchId;
+        activeScoreHeaders=data.headers;
         renderSourcePreview(data.headers,data.preview);
         loadAssessments(selectedOffering,()=>{ populateHeaderSelects(); renderWideColumns(); document.getElementById('score-mapping').hidden=false;
-          document.getElementById('score-message').textContent=`พบ ${data.rowCount} แถว กรุณากำหนด column mapping`; });
-      }).withFailureHandler(error => { button.disabled=false; document.getElementById('score-message').textContent=error.message; })
+          document.getElementById('score-message').textContent=`${data.duplicate ? 'เปิด batch เดิม' : 'พบ'} ${data.rowCount} แถว กรุณากำหนด column mapping${data.processingMs ? ` (${(data.processingMs/1000).toFixed(1)} วินาที)` : ''}`; });
+      }).withFailureHandler(error => { clearTimeout(scoreProgressTimer); button.disabled=false; document.getElementById('score-message').textContent=error.message; })
         .uploadScoreFile({ offeringId:values.get('offeringId'), importType:values.get('importType'), filename:file.name, base64Data:reader.result });
-      reader.onerror=()=>{ button.disabled=false; document.getElementById('score-message').textContent='อ่านไฟล์ไม่สำเร็จ'; };
+      reader.onerror=()=>{ clearTimeout(scoreProgressTimer); button.disabled=false; document.getElementById('score-message').textContent='อ่านไฟล์ไม่สำเร็จ'; };
       reader.readAsDataURL(file);
     });
     function populateHeaderSelects() {
