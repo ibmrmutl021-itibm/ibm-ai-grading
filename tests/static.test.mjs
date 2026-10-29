@@ -60,5 +60,7 @@ const html = await readFile(new URL('../Index.html', import.meta.url), 'utf8');
 const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/i);
 assert.ok(inlineScript, 'missing UI script');
 assert.doesNotThrow(() => new Function(inlineScript[1]), 'syntax error in Index.html script');
+const codeSource = await readFile(new URL('../Code.gs', import.meta.url), 'utf8');
+assert.match(codeSource, /function initializeApplicationStorage\s*\(/);
 console.log(`Build 2 static checks passed (${required.length} files, ${expectedSheets.length} sheets, roster and score fixtures).`);
 

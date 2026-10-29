@@ -12,6 +12,7 @@
     header h1 { margin:0; font-size:1.4rem; }
     header p { margin:.25rem 0 0; color:#c6c6c6; }
     main { max-width:1100px; margin:auto; padding:1rem; display:grid; gap:1rem; }
+    #application-content { display:grid; gap:1rem; }
     .card { background:#fff; padding:1.25rem; border-top:4px solid var(--blue); box-shadow:0 1px 2px #0001; }
     form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
     label { display:grid; gap:.35rem; font-weight:600; }
@@ -31,8 +32,15 @@
   </style>
 </head>
 <body>
-  <header><h1>IBM AI Teaching &amp; Grading Center</h1><p>Build 1 · Roster versions &amp; student identity</p></header>
+  <header><h1>IBM AI Teaching &amp; Grading Center</h1><p>Build 2 · Roster, score import &amp; gradebook</p></header>
   <main>
+    <section class="card" id="setup-card" aria-labelledby="setup-title" hidden>
+      <h2 id="setup-title">ตั้งค่าระบบครั้งแรก / Initialize system</h2>
+      <p>ระบบยังไม่มีฐานข้อมูลกลาง กดปุ่มนี้เพื่อสร้าง Google Spreadsheet และโครงสร้างโฟลเดอร์ส่วนตัวใน Google Drive ของผู้สอน</p>
+      <button id="initialize-storage" type="button">สร้างฐานข้อมูลและโฟลเดอร์ / Initialize storage</button>
+      <p id="setup-message" role="status" aria-live="polite"></p>
+    </section>
+    <div id="application-content">
     <section class="card" aria-labelledby="create-title">
       <h2 id="create-title">สร้างรายวิชาที่เปิดสอน / Create offering</h2>
       <form id="offering-form">
@@ -137,6 +145,7 @@
       </form>
       <p id="export-message" role="status" aria-live="polite"></p>
     </section>
+    </div>
   </main>
   <script>
     const form = document.getElementById('offering-form');
@@ -152,6 +161,8 @@
     let activeScoreBatchId = '';
     let activeScoreHeaders = [];
     let activeAssessments = [];
+    const setupCard = document.getElementById('setup-card');
+    const applicationContent = document.getElementById('application-content');
     function text(value) { return document.createTextNode(value == null ? '' : String(value)); }
     function render(rows) {
       tbody.replaceChildren();
@@ -177,9 +188,24 @@
       if (rows && rows.length) loadAssessments(rows[0].offering_id);
     }
     function load() {
-      google.script.run.withSuccessHandler(data => { render(data.offerings); populateOfferings(data.offerings); })
+      google.script.run.withSuccessHandler(data => {
+        const ready = data.setup.spreadsheetConfigured && data.setup.rootFolderConfigured;
+        setupCard.hidden = ready; applicationContent.hidden = !ready;
+        if (ready) { render(data.offerings); populateOfferings(data.offerings); }
+      })
         .withFailureHandler(error => { message.textContent = error.message; }).getBootstrapData();
     }
+    document.getElementById('initialize-storage').addEventListener('click', event => {
+      const button = event.currentTarget; const status = document.getElementById('setup-message');
+      button.disabled = true; status.textContent = 'กำลังสร้างฐานข้อมูลและโฟลเดอร์…';
+      google.script.run.withSuccessHandler(data => {
+        button.disabled = false; status.textContent = 'ตั้งค่าระบบสำเร็จ';
+        setupCard.hidden = true; applicationContent.hidden = false;
+        render(data.offerings); populateOfferings(data.offerings);
+      }).withFailureHandler(error => {
+        button.disabled = false; status.textContent = error.message;
+      }).initializeApplicationStorage();
+    });
     function renderRosterReview(data) {
       activeRosterVersionId = data.version.roster_version_id;
       rosterRows.replaceChildren();

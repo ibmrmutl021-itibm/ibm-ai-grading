@@ -19,11 +19,18 @@ function include_(filename) {
 }
 
 function getBootstrapData() {
+  const setup = getSetupStatus();
   return {
-    setup: getSetupStatus(),
-    offerings: listCourseOfferings(),
+    setup: setup,
+    offerings: setup.spreadsheetConfigured && setup.rootFolderConfigured ? listCourseOfferings() : [],
     rosterTypes: ROSTER_TYPES,
     scoreImportTypes: SCORE_IMPORT_TYPES
   };
+}
+
+function initializeApplicationStorage() {
+  requireInstructor_();
+  setupBuild0({ seedSyntheticData: false });
+  return getBootstrapData();
 }
 

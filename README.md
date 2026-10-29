@@ -36,6 +36,8 @@ Google Apps Script MVP following the approved blueprint. This repository current
 6. Run `runBuild2SelfTests()`. It creates isolated temporary resources, validates the foundation, 41/51-person roster reconciliation, offering isolation, identity precedence, and score-state separation, then moves those resources to trash. Earlier self-test names remain as compatibility aliases.
 7. Deploy only after reviewing the test result: **Deploy → New deployment → Web app**, execute as **User accessing the web app**, and require a signed-in Google account. The server still enforces `INSTRUCTOR_EMAIL` on every exposed action.
 
+Alternatively, after deployment the authenticated instructor can use **Initialize system** on the web page. It invokes the same initializer without synthetic records and stores `SPREADSHEET_ID` and `ROOT_FOLDER_ID` in Script Properties.
+
 ## Script Properties
 
 | Key | Required | Purpose |
